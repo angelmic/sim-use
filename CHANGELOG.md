@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Apple Simulator platform routing reads CoreSimulator's per-device `device.plist` (~1 ms) instead of forking `simctl list devices -j` (hundreds of ms) in every CLI invocation — `ui`, `screenshot`, and `record-video` lose a per-call fork, and long-lived daemons now see simulators created after they spawned. The simctl catalog remains as a fallback for custom device sets, and a fallback failure prints a warning instead of silently routing tvOS devices to the iOS backend.
+- Apple Simulator platform routing reads CoreSimulator's per-device `device.plist` (~1 ms) instead of forking `simctl list devices -j` (hundreds of ms) in every CLI invocation — `ui`, `screenshot`, and `record-video` lose a per-call fork, and long-lived daemons now see simulators created after they spawned. The simctl catalog remains as a safety net for unreadable plists (devices in a custom `--set` are visible to neither source and keep the historical iOS routing), and a fallback failure prints a warning instead of silently routing tvOS devices to the iOS backend.
 - Touch/typing/recording verbs aimed at a tvOS Simulator fail in-process with the focus-navigation hint instead of first auto-spawning a per-UDID daemon that can never serve them.
 - A failed Appium session DELETE no longer fails a tvOS command whose work had already completed; teardown is best-effort with a stderr warning.
 - The tvOS outline no longer drops the focused element when it is unlabeled, or when the WebDriver source emits a duplicate node (same role/label/frame) whose focused copy comes second — duplicates now merge their states.
