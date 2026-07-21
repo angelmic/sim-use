@@ -19,6 +19,16 @@ final class DeviceModelTests: XCTestCase {
         XCTAssertFalse(d.isUsable)
     }
 
+    func testTVOSBootedIsUsable() {
+        let d = Device(udid: "X", name: "Apple TV", platform: .tvos, state: "Booted", runtime: "tvOS 18.2")
+        XCTAssertTrue(d.isUsable)
+    }
+
+    func testTVOSShutdownIsNotUsable() {
+        let d = Device(udid: "X", name: "Apple TV", platform: .tvos, state: "Shutdown", runtime: "tvOS 18.2")
+        XCTAssertFalse(d.isUsable)
+    }
+
     func testIOSTransitionalStatesAreNotUsable() {
         // sim-use can't drive HID against a half-booted sim, so be strict.
         for state in ["Booting", "Shutting Down", "Creating"] {
@@ -64,6 +74,14 @@ final class DeviceModelTests: XCTestCase {
         let payload = #"{"deviceId":"abc","name":"x","platform":"ios","state":"Booted"}"#
         let d = try JSONDecoder().decode(Device.self, from: Data(payload.utf8))
         XCTAssertEqual(d.udid, "abc")
+    }
+
+    func testTVOSJSONUsesDistinctPlatformDiscriminator() throws {
+        let d = Device(udid: "tv", name: "Apple TV", platform: .tvos, state: "Booted", runtime: "tvOS 18.2")
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let json = String(data: try encoder.encode(d), encoding: .utf8)
+        XCTAssertEqual(json, #"{"deviceId":"tv","name":"Apple TV","platform":"tvos","runtime":"tvOS 18.2","state":"Booted"}"#)
     }
 
     func testJSONAcceptsUDIDOnly() throws {

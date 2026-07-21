@@ -43,6 +43,24 @@ final class SimctlDeviceListerTests: XCTestCase {
         XCTAssertTrue(device.isUsable)
     }
 
+    func testClassifiesTVOSRuntimeAsTVOS() throws {
+        let json = #"""
+        {
+          "devices": {
+            "com.apple.CoreSimulator.SimRuntime.tvOS-18-2": [
+              {"udid": "8737CB71-6462-41EC-B13E-E7C5E8F033E9",
+               "name": "Apple TV 4K (3rd generation) (at 1080p)",
+               "state": "Booted"}
+            ]
+          }
+        }
+        """#.data(using: .utf8)!
+        let device = try XCTUnwrap(SimctlDeviceLister.parse(json).first)
+        XCTAssertEqual(device.platform, .tvos)
+        XCTAssertEqual(device.runtime, "tvOS 18.2")
+        XCTAssertTrue(device.isUsable)
+    }
+
     func testFlattensAcrossRuntimesAndSortsStably() throws {
         // Two runtimes, three devices total. Output must be stable across
         // dict iteration ordering so two consecutive invocations against
