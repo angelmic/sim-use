@@ -7,6 +7,7 @@ import Darwin
 import SimUseCore
 import AndroidBackend
 import iOSSimBackend
+import TVOSBackend
 
 // MARK: - Main Entry Point
 //
@@ -71,7 +72,7 @@ struct SimUse: AsyncParsableCommand {
     static let simUseLogger = SimUseLogger()
 
     static let configuration = CommandConfiguration(
-        abstract: "A utility to interact with iOS Simulators and Android emulators/devices and extract accessibility information.",
+        abstract: "A utility to interact with iOS/tvOS Simulators and Android emulators/devices and extract accessibility information.",
         version: VERSION,
         subcommands: [
             // Cross-platform verbs (top-level routes by UDID shape).
@@ -101,6 +102,7 @@ struct SimUse: AsyncParsableCommand {
             // under `IOSSimCommand` only — the top-level surface only
             // carries verbs that work on both platforms.
             IOSSimCommand.self,
+            TVOSCommand.self,
             AndroidCommand.self,
         ]
     )
