@@ -68,7 +68,11 @@ struct Type: SimUseExecutableCommand {
 
     // The daemon runs with stdin=/dev/null. Bypass daemon when reading
     // from stdin so --stdin actually sees the caller's terminal input.
-    var daemonBypass: Bool { useStdin }
+    // tvOS additionally bypasses so the TVOSCapabilityError rejection
+    // happens in-process, not in a freshly spawned daemon.
+    var daemonBypass: Bool {
+        useStdin || PlatformRouter.resolve(udid: device.resolved) == .tvOSSim
+    }
 
     func format(_ result: ExecutionResult) -> CommandOutput { .empty }
 
