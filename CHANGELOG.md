@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Experimental tvOS Simulator support through Appium/XCUITest: top-level `ui` and `screenshot`, the `sim-use tvos` namespace, and focus-aware `tvos remote <up|down|left|right|select|menu|play-pause|home>`. Each operation owns and closes a short-lived WebDriver session; `--bundle-id` (or `SIM_USE_TVOS_BUNDLE_ID` for top-level verbs) restores the target app after a cold WDA launch, and `SIM_USE_APPIUM_URL` overrides the default `http://127.0.0.1:4723` endpoint.
+- tvOS Playground fixture (`Playgrounds/tvOS`, `com.cameroncooke.SimUsePlaygroundTV`): a deterministic 3x2 focus grid with default focus on Alpha and a `Last: <button>` status line, plus the TVOSRemoteTests E2E suite (focus movement along the grid contract, select activation, top-level routing, screenshot, coordinate-verb rejection, app-state platform label). Gated by `SIM_USE_E2E=1` + `TVOS_SIMULATOR_UDID`; `make e2e-tvos` builds/installs the fixture, preflights Appium, and runs the suite. Not part of `make e2e` while tvOS support is experimental.
 
 ### Changed
 
