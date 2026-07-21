@@ -79,11 +79,25 @@ public struct TVOSAppiumClient: Sendable {
         let session = TVOSAppiumSession(id: sessionID, client: self)
         do {
             let result = try await operation(session)
-            try await deleteSession(sessionID)
+            await deleteSessionBestEffort(sessionID)
             return result
         } catch {
-            try? await deleteSession(sessionID)
+            await deleteSessionBestEffort(sessionID)
             throw error
+        }
+    }
+
+    /// Session teardown is cleanup, not the command's outcome: once the
+    /// operation has produced a result, a failed DELETE must not turn the
+    /// whole command into a failure (Appium's newCommandTimeout reaps the
+    /// session regardless). Say so on stderr, then move on.
+    private func deleteSessionBestEffort(_ sessionID: String) async {
+        do {
+            try await deleteSession(sessionID)
+        } catch {
+            FileHandle.standardError.write(Data(
+                "warning: failed to close Appium session \(sessionID): \(error.localizedDescription)\n".utf8
+            ))
         }
     }
 

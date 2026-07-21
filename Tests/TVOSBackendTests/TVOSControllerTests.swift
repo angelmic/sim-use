@@ -79,6 +79,21 @@ final class TVOSControllerTests: XCTestCase {
         XCTAssertEqual(requests.last?.method, "DELETE")
     }
 
+    func testDeleteFailureAfterSuccessfulOperationStillReturnsResult() async throws {
+        let transport = MockTransport(responses: [
+            response(value: SessionValue(sessionId: "session-5")),
+            response(value: settingsSource(focusedLabel: "一般")),
+            webdriverError(statusCode: 500, message: "delete blew up"),
+        ])
+        let controller = makeController(transport: transport)
+
+        let result = try await controller.describeUI(udid: tvosUDID, includeRaw: false)
+
+        XCTAssertEqual(result.appPackage, "com.apple.TVSettings")
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(requests.map(\.method), ["POST", "GET", "DELETE"])
+    }
+
     func testScreenshotDecodesBase64AndClosesSession() async throws {
         let png = Data([0x89, 0x50, 0x4E, 0x47])
         let transport = MockTransport(responses: [
