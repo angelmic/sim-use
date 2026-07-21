@@ -18,11 +18,23 @@ public struct TVOSRemoteCommand: SimUseExecutableCommand {
     @OptionGroup public var target: TVOSTargetOptions
     @OptionGroup public var json: JSONOutputOptions
 
+    @Option(
+        name: .customLong("settle-delay"),
+        help: "Seconds to wait after the press before sampling the focus state for the after-report. Focus animations need a beat to settle; 0 disables the wait."
+    )
+    public var settleDelay: Double = 0.35
+
     public var jsonOutput: Bool { json.enabled }
     public var daemonBypass: Bool { true }
     public var simulatorUDIDForDaemon: String? { device.resolved }
 
     public init() {}
+
+    public func validate() throws {
+        guard settleDelay >= 0 else {
+            throw ValidationError("--settle-delay must be >= 0.")
+        }
+    }
 
     public mutating func resolveDeferredArguments() throws {
         try device.resolve()
@@ -33,7 +45,8 @@ public struct TVOSRemoteCommand: SimUseExecutableCommand {
         return try await controller.pressRemote(
             button,
             udid: device.resolved,
-            bundleId: target.bundleId
+            bundleId: target.bundleId,
+            settleDelay: settleDelay
         )
     }
 

@@ -60,7 +60,8 @@ public struct TVOSController: Sendable {
     public func pressRemote(
         _ button: TVOSRemoteButton,
         udid: String,
-        bundleId: String? = nil
+        bundleId: String? = nil,
+        settleDelay: TimeInterval = 0.35
     ) async throws -> TVOSRemoteResult {
         try await client.withSession(udid: udid, bundleId: bundleId) { session in
             let beforeSource = try await session.source()
@@ -68,6 +69,11 @@ public struct TVOSController: Sendable {
                 .render(source: beforeSource, includeRaw: false)
                 .entries.first(where: { $0.states.contains("focused") })
             try await session.pressRemote(button)
+            // The focus engine animates the move; sampling immediately can
+            // still see the pre-press focus and misreport the transition.
+            if settleDelay > 0 {
+                try await Task.sleep(nanoseconds: UInt64(settleDelay * 1_000_000_000))
+            }
             let afterSource = try await session.source()
             let after = try TVOSOutlineRenderer
                 .render(source: afterSource, includeRaw: false)
