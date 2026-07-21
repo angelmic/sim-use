@@ -168,7 +168,7 @@ All device-scoped commands accept `--device <ID>` (optional when only one simula
 
   * **Top-level** — shared verbs. `ui` and `screenshot` support iOS, tvOS, and Android; touch, typing, recording, streaming, and app-state verbs support iOS and Android and fail fast with a tvOS-specific hint.
   * **`sim-use ios <verb>`** — iOS-only: `key`, `key-combo`, `key-sequence`, `batch`.
-  * **`sim-use tvos <verb>`** — tvOS-only: `remote`; `ui` and `screenshot` are also exposed here for symmetry.
+  * **`sim-use tvos <verb>`** — tvOS-only: `remote` and `type`; `ui` and `screenshot` are also exposed here for symmetry.
   * **`sim-use android <verb>`** — Android-only: `init`, `devices`, `ping`, `scroll`.
 
 Run `sim-use --help` or `sim-use <command> --help` for the full flag set.
@@ -215,6 +215,7 @@ sim-use tvos ui --device $TV_UDID --bundle-id $TV_BUNDLE_ID
 sim-use tvos remote down --device $TV_UDID --bundle-id $TV_BUNDLE_ID
 sim-use tvos remote select --device $TV_UDID --bundle-id $TV_BUNDLE_ID
 sim-use tvos remote menu --device $TV_UDID --bundle-id $TV_BUNDLE_ID
+sim-use tvos type 'search text' --device $TV_UDID --bundle-id $TV_BUNDLE_ID
 ```
 
 Available buttons: `up`, `down`, `left`, `right`, `select`, `menu`, `play-pause`, and `home`. The text result includes the focused element before and after the action; `--json` returns both entries structurally. Coordinate touch verbs are intentionally unsupported on tvOS.
