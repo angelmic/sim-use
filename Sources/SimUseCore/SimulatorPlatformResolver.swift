@@ -11,13 +11,14 @@ import Foundation
 /// 1. The device's own `device.plist` in the default CoreSimulator device
 ///    set — a single ~1 ms file read, fresh on every call.
 /// 2. `simctl list devices -j` — a full process fork (hundreds of ms), kept
-///    as the fallback for hosts using a custom device set. Forked at most
-///    once per process.
+///    as a safety net for plists this code cannot read (layout drift,
+///    permissions). Forked at most once per process.
 ///
-/// Families this resolver does not support (watchOS, visionOS) resolve to
-/// `nil`, and `PlatformRouter` then applies its historical iOS fallback — so
-/// for routing purposes an unknown Apple UUID behaves exactly as it did
-/// before tvOS support existed.
+/// Neither source sees devices in a custom device set (`simctl --set` —
+/// flag-less `simctl list` only serves the default set too), and families
+/// this resolver does not support (watchOS, visionOS) resolve to `nil`
+/// either way; `PlatformRouter` then applies its historical iOS fallback,
+/// so such UUIDs route exactly as they did before tvOS support existed.
 public enum SimulatorPlatformResolver {
     public enum ResolverError: Error, LocalizedError {
         case simctlFailed(String)
@@ -73,8 +74,8 @@ public enum SimulatorPlatformResolver {
     /// Live lookup used by `PlatformRouter`. Prefers the per-device plist —
     /// cheap enough for hot verbs like `ui`, and always current, so a
     /// simulator created after a long-lived daemon spawned still resolves —
-    /// and falls back to the process-cached `simctl` catalog for device sets
-    /// outside the default location.
+    /// and falls back to the process-cached `simctl` catalog when the plist
+    /// is missing or unreadable.
     public static func livePlatform(for udid: String) -> Platform? {
         if let platform = devicePlistPlatform(for: udid) {
             return platform
@@ -103,8 +104,9 @@ public enum SimulatorPlatformResolver {
     }
 
     /// CoreSimulator's default device set. Devices in a custom set
-    /// (`simctl --set`) are not visible here; they are served by the simctl
-    /// fallback instead.
+    /// (`simctl --set`) are visible neither here nor to the flag-less
+    /// `simctl list` fallback; they resolve to nil and keep the router's
+    /// historical iOS fallback.
     static let defaultDeviceSetURL = FileManager.default
         .homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Developer/CoreSimulator/Devices")
