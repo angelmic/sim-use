@@ -152,6 +152,13 @@ public struct TVOSAppiumClient: Sendable {
         else {
             throw TVOSAppiumError.invalidResponse("session response did not include a session id")
         }
+        // The id is interpolated into every request path. Reject
+        // URL-hostile characters here, deterministically — depending on
+        // URL(string:) to fail is unreliable, since newer Foundation
+        // percent-encodes invalid characters instead of returning nil.
+        guard sessionID.range(of: "^[A-Za-z0-9._:-]+$", options: .regularExpression) != nil else {
+            throw TVOSAppiumError.invalidResponse("session id contains unsupported characters: \(sessionID)")
+        }
         return sessionID
     }
 
@@ -162,7 +169,11 @@ public struct TVOSAppiumClient: Sendable {
 
     private func send(method: String, path: String, body: Data? = nil) async throws -> TVOSAppiumResponse {
         let suffix = path.hasPrefix("/") ? String(path.dropFirst()) : path
-        let url = URL(string: baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/" + suffix)!
+        // Defence in depth behind the createSession id validation: never
+        // crash on a force-unwrap if an unvalidated value reaches a path.
+        guard let url = URL(string: baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/" + suffix) else {
+            throw TVOSAppiumError.invalidResponse("cannot build a request URL for path \(path)")
+        }
         do {
             return try await transport.send(TVOSAppiumRequest(method: method, url: url, body: body))
         } catch let error as TVOSAppiumError {
