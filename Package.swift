@@ -24,6 +24,10 @@ let package = Package(
             name: "iOSSimBackend",
             targets: ["iOSSimBackend"]
         ),
+        .library(
+            name: "TVOSBackend",
+            targets: ["TVOSBackend"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0"),
@@ -76,6 +80,14 @@ let package = Package(
                 .copy("Resources"),
             ]
         ),
+        .target(
+            name: "TVOSBackend",
+            dependencies: [
+                "SimUseCore",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
+            path: "Sources/TVOSBackend"
+        ),
         .executableTarget(
             name: "SimUse",
             dependencies: [
@@ -127,6 +139,7 @@ let package = Package(
             exclude: [
                 "SimUseCoreTests",
                 "AndroidBackendTests",
+                "TVOSBackendTests",
             ],
             resources: [
                 .copy("README.md"),
@@ -146,6 +159,11 @@ let package = Package(
             // it as a resource would emit a SwiftPM warning. Add a
             // `.copy("Fixtures")` entry when real fixture files
             // land.
+        ),
+        .testTarget(
+            name: "TVOSBackendTests",
+            dependencies: ["TVOSBackend", "SimUseCore"],
+            path: "Tests/TVOSBackendTests"
         ),
         .plugin(
             name: "VersionPlugin",
