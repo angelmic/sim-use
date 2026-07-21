@@ -24,7 +24,7 @@ sim-use tvos remote select --device <TV_UDID> --bundle-id <id>      # activate
 sim-use tvos remote menu --device <TV_UDID> --bundle-id <id>        # back
 ```
 
-Buttons: `up`, `down`, `left`, `right`, `select`, `menu`, `play-pause`, `home`. tvOS navigation is focus-driven; `tap`, `swipe`, `touch`, typing, and other coordinate actions intentionally fail with a tvOS-specific hint.
+Buttons: `up`, `down`, `left`, `right`, `select`, `menu`, `play-pause`, `home`. tvOS navigation is focus-driven; `tap`, `swipe`, `touch`, typing, and other coordinate actions intentionally fail with a tvOS-specific hint. `remote` waits 0.35 s for the focus animation before reporting the before → after transition; tune or disable with `--settle-delay`.
 
 `--bundle-id` is recommended whenever the target is known: Appium then restores it after a cold WDA launch. Top-level `ui` / `screenshot` read the same target from `SIM_USE_TVOS_BUNDLE_ID`.
 
