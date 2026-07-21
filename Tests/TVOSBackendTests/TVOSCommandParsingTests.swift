@@ -59,5 +59,27 @@ struct TVOSCommandParsingTests {
         #expect(command.output == "/tmp/tvos.png")
     }
 
+    @Test("remote applies a default focus settle delay and accepts an override")
+    func settleDelayDefaultsAndParses() throws {
+        let defaulted = try TVOSCommand.parseAsRoot([
+            "remote", "down", "--device", tvosUDID,
+        ]) as? TVOSRemoteCommand
+        #expect(defaulted?.settleDelay == 0.35)
+
+        let overridden = try TVOSCommand.parseAsRoot([
+            "remote", "down", "--device", tvosUDID, "--settle-delay", "0",
+        ]) as? TVOSRemoteCommand
+        #expect(overridden?.settleDelay == 0)
+    }
+
+    @Test("remote rejects a negative settle delay")
+    func negativeSettleDelayRejected() {
+        #expect(throws: (any Error).self) {
+            _ = try TVOSCommand.parseAsRoot([
+                "remote", "down", "--device", tvosUDID, "--settle-delay", "-1",
+            ])
+        }
+    }
+
     private let tvosUDID = "8737CB71-6462-41EC-B13E-E7C5E8F033E9"
 }

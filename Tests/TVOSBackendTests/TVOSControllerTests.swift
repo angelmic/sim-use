@@ -67,7 +67,7 @@ final class TVOSControllerTests: XCTestCase {
         ])
         let controller = makeController(transport: transport)
 
-        let result = try await controller.pressRemote(.playPause, udid: tvosUDID)
+        let result = try await controller.pressRemote(.playPause, udid: tvosUDID, settleDelay: 0)
 
         XCTAssertEqual(result.before?.label, "一般")
         XCTAssertEqual(result.after?.label, "使用者和帳號")
