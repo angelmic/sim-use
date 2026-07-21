@@ -51,4 +51,12 @@ struct AppStateResultTests {
         let result = AppState.buildResult(platform: "ios", snapshot: snap([:]), bundleId: nil, didReset: true)
         #expect(result.didReset == true)
     }
+
+    @Test("Platform label distinguishes tvOS from iOS and keeps the iOS fallback")
+    func platformLabels() {
+        #expect(AppState.platformLabel(for: .android) == "android")
+        #expect(AppState.platformLabel(for: .tvOSSim) == "tvos")
+        #expect(AppState.platformLabel(for: .iOSSim) == "ios")
+        #expect(AppState.platformLabel(for: nil) == "ios")
+    }
 }

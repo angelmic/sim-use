@@ -72,7 +72,8 @@ struct AppState: SimUseExecutableCommand {
 
     func execute() async throws -> ExecutionResult {
         let udid = device.resolved
-        let isAndroid = PlatformRouter.looksLikeAndroid(udid)
+        let platform = PlatformRouter.resolve(udid: udid)
+        let isAndroid = platform == .android
         let probed = isAndroid
             ? AndroidProcessLister.appSnapshot(serial: udid)
             : BundleIdentifierResolver.appSnapshot(udid: udid)
@@ -94,11 +95,23 @@ struct AppState: SimUseExecutableCommand {
         }
 
         return Self.buildResult(
-            platform: isAndroid ? "android" : "ios",
+            platform: Self.platformLabel(for: platform),
             snapshot: snapshot,
             bundleId: bundleId,
             didReset: reset
         )
+    }
+
+    /// JSON envelope discriminator. The Apple probe (`launchctl list` via
+    /// `simctl spawn`) serves iOS and tvOS Simulators alike, so tvOS shares
+    /// it — but the envelope must not claim `ios` for a tvOS device: agents
+    /// key platform-specific behaviour off this field.
+    static func platformLabel(for platform: Platform?) -> String {
+        switch platform {
+        case .android: return "android"
+        case .tvOSSim: return "tvos"
+        case .iOSSim, .none: return "ios"
+        }
     }
 
     /// Pure snapshot → result mapping. Exposed for tests.
