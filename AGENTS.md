@@ -47,10 +47,11 @@ make e2e            # BOTH iOS + Android in sequence (needs a booted sim AND an 
 make e2e-ios        # iOS only — booted simulator + Playground fixture
 make e2e-android    # Android only — reachable device/emulator + Playground fixture
 make e2e-matrix     # iOS across Xcode 26/27 × Device Hub closed/open legs (~35 min default)
+make e2e-tvos       # tvOS only (experimental, not in `make e2e`) — tvOS Simulator + Appium
 make eval           # agent evals (real `claude -p` cost; prompts before running)
 ```
 
-E2E suites compile always but skip unless `SIM_USE_E2E=1` (iOS) / `SIM_USE_E2E_ANDROID=1` (Android) is set — `make test` never touches a device, which is why CI needs no simulator. The runners set those vars for you.
+E2E suites compile always but skip unless `SIM_USE_E2E=1` (iOS) / `SIM_USE_E2E_ANDROID=1` (Android) is set — `make test` never touches a device, which is why CI needs no simulator. The runners set those vars for you. The tvOS suite additionally needs `TVOS_SIMULATOR_UDID` and a reachable Appium server (`appium --port 4723`, XCUITest driver); `scripts/test-runner-tvos.sh` arranges everything including the `Playgrounds/tvOS` focus-grid fixture.
 
 **Budget the time: a full green `make e2e-ios` run is ~15 minutes.** The iOS suites drive real HID gestures and wait on simulator animations/keyboard settling, so per-suite waits dominate — this is expected, not a hang. `make e2e` (both platforms) is ~20+ min. When you only touched one platform, run just that platform's target. The runners keep going past a failed suite and print a full pass/fail map at the end, so read the summary rather than assuming the first red aborted the rest.
 
