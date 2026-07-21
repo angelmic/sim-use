@@ -17,6 +17,6 @@ public struct TVOSCapabilityError: Error, LocalizedError, HintProviding, Equatab
     }
 
     public var hint: String? {
-        "Use `sim-use tvos remote <up|down|left|right|select|menu|play-pause|home>` and re-run `sim-use ui` to verify focus."
+        "Use `sim-use tvos remote <up|down|left|right|select|menu|play-pause|home>` and re-run `sim-use ui` to verify focus. For text entry, focus a text field and use `sim-use tvos type <text>`."
     }
 }

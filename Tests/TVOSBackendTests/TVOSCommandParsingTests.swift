@@ -59,6 +59,19 @@ struct TVOSCommandParsingTests {
         #expect(command.output == "/tmp/tvos.png")
     }
 
+    @Test("The tvOS type command parses its text and target")
+    func parsesTypeCommand() throws {
+        let parsed = try TVOSCommand.parseAsRoot([
+            "type", "hi there",
+            "--device", tvosUDID,
+            "--bundle-id", "com.example.TVApp",
+        ])
+        let command = try #require(parsed as? TVOSTypeCommand)
+
+        #expect(command.text == "hi there")
+        #expect(command.target.bundleId == "com.example.TVApp")
+    }
+
     @Test("remote applies a default focus settle delay and accepts an override")
     func settleDelayDefaultsAndParses() throws {
         let defaulted = try TVOSCommand.parseAsRoot([
