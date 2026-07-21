@@ -1,6 +1,6 @@
 ---
 name: sim-use
-description: Drive iOS Simulator and Android emulator/device screens for AI agents. Use when asked to automate a simulator or emulator, tap/swipe/type on a device, describe UI, take a screenshot, or interact with a mobile app.
+description: Drive iOS/tvOS Simulator and Android emulator/device screens for AI agents. Use when asked to automate a simulator or emulator, tap/swipe/type on a touch device, navigate tvOS focus, describe UI, take a screenshot, or interact with a mobile app.
 ---
 
 ## 0. Preflight
@@ -11,13 +11,13 @@ Before first interaction with a device, run the preflight check:
 python3 scripts/preflight.py --device <UDID>
 ```
 
-This verifies sim-use is installed, the device is reachable, and the daemon is healthy. If you don't have the script, do the checks manually:
+This verifies sim-use is installed, the device is reachable, and its backend transport is healthy. If you don't have the script, do the checks manually:
 
 1. `sim-use --version` — confirm sim-use is on PATH.
 2. `sim-use devices` — confirm the target device is listed and booted/connected.
 3. `sim-use ui --device <UDID>` — confirm you can read the screen.
 
-`--device` is optional when only one simulator is booted or one daemon is running. For Android, run `sim-use android init --device <serial>` once to install the bridge APK.
+`--device` is optional when only one simulator is booted or one daemon is running. For Android, run `sim-use android init --device <serial>` once to install the bridge APK. For tvOS, start Appium with the XCUITest driver before preflight (`appium --port 4723`; override with `SIM_USE_APPIUM_URL`) and pass the target app as `sim-use tvos ui --bundle-id <id>` so a cold WDA launch restores it before observation.
 
 ## 1. The observe-act loop
 
@@ -31,11 +31,11 @@ sim-use ui --device <UDID>
 
 Read the outline. Each element has an `@N` alias and optionally a `#<id>` identifier. List cells carry `#N` (dominant list) or `#N@M` (scoped).
 
-Frames in the JSON output (`--json`: `entries[].frame`, `screen`) are in platform-native units — iOS **points**, Android **pixels**. Key off the envelope's `platform` field before doing math on coordinates across platforms. Always pair `--json` with `--no-raw` — see *Keeping output small* below.
+Frames in the JSON output (`--json`: `entries[].frame`, `screen`) are in platform-native units — iOS **points**, tvOS WebDriver display coordinates, Android **pixels**. Key off the envelope's `platform` field before doing math on coordinates across platforms. Always pair `--json` with `--no-raw` — see *Keeping output small* below.
 
 ### Act
 
-Pick a selector, in order of preference:
+On iOS or Android, pick a selector in order of preference:
 
 | Selector | When to use |
 |---|---|
@@ -47,6 +47,15 @@ Pick a selector, in order of preference:
 | `tap -x N -y N` / `tap --point x,y` | Last resort for elements with no AX data. |
 
 Disambiguate collisions with `--element-type` or `--frame minY=0.7r` (see `references/cheatsheet.md`).
+
+On tvOS, do not use coordinate or selector taps. Read the entry carrying the `focused` state, then move or activate focus with the Siri Remote surface:
+
+```bash
+sim-use tvos remote down --device <UDID> --bundle-id <id>
+sim-use tvos remote right --device <UDID> --bundle-id <id>
+sim-use tvos remote select --device <UDID> --bundle-id <id>
+sim-use tvos remote menu --device <UDID> --bundle-id <id>
+```
 
 ### Verify
 
@@ -77,6 +86,9 @@ Every byte of command output you read costs context. Defaults that keep the loop
 | Paste unicode | `sim-use paste 'こんにちは 🎉' --device <UDID>` (iOS: needs hardware keyboard) |
 | Hardware button | `sim-use button home --device <UDID>` |
 | Android back | `sim-use button back --device <UDID>` |
+| tvOS move focus | `sim-use tvos remote up\|down\|left\|right --device <UDID>` |
+| tvOS activate focus | `sim-use tvos remote select --device <UDID>` |
+| tvOS go back | `sim-use tvos remote menu --device <UDID>` |
 | Wait for animation | `sleep 0.4` between commands, or `--pre-delay 0.5` |
 | Toggle/switch | `sim-use tap @N --duration 0.05 --device <UDID>` (UISwitch needs a brief hold) |
 | Swipe | `sim-use swipe --from 50,500 --to 350,500 --device <UDID>` |
@@ -96,6 +108,9 @@ Quick symptom index — see `references/pitfalls.md` for detailed recipes.
 | Tap lands but nothing happens | Animation in progress, or element not yet interactive | Add `--pre-delay 0.3` or `--wait-timeout 3` |
 | iOS: `paste` drops text | Soft keyboard only; HID Cmd+V is ignored | Use `paste --via-menu --target-id <id>` |
 | Android: `paste` denied | Background clipboard access blocked | Use `type` instead |
+| tvOS: `Cannot reach Appium` | Appium is not running at `SIM_USE_APPIUM_URL` | Run `appium --port 4723`; ensure `appium driver list --installed` includes XCUITest |
+| tvOS: `ui` unexpectedly shows Home after Appium starts | A cold WDA launch changed the foreground app and no target was supplied | Re-run the namespaced command with `--bundle-id <id>`, or set `SIM_USE_TVOS_BUNDLE_ID` for top-level `ui` / `screenshot` |
+| tvOS: focus does not move | Direction is unavailable from the current focus graph, or an animation is still settling | Re-run `ui`, choose another direction, and verify the `focused` entry |
 | Outline shows `U+FFFC` in label | iOS icon placeholder character | Match with `--label-regex` excluding the prefix |
 | `[i] … covers ~N% of the screen` warning (text output, or `--json` top-level `advisory` key) | The selector resolved to a near-full-screen wrapper (common on Flutter/canvas UIs) and the tap hit its center, likely missing the intended control | Re-run `ui` and target the control via `@N`/`#<id>`, or pass explicit `-x/-y`/`--point` |
 | `[i] Screen orientation could not be confirmed…` / `…coordinates may be stale…` advisory | Device/app is rotated (the `App:` header shows a tag like `(landscape-right)`) and orientation self-calibration couldn't verify the mapping, or the `@N` snapshot predates a rotation | Re-run `ui` and tap again; selectors handle rotation automatically once calibration succeeds. Explicit `-x/-y`/`--point` is device-native portrait space by default — on `swipe`/`touch`, pass `--coordinate-space ui` to use outline (visual-space) coordinates on a rotated device |
@@ -104,7 +119,7 @@ Quick symptom index — see `references/pitfalls.md` for detailed recipes.
 
 See `references/crash-awareness.md` for the full protocol. Summary:
 
-sim-use watches for the target process disappearing between commands. When it detects a crash:
+On iOS and Android, sim-use watches for the target process disappearing between commands. When it detects a crash:
 
 ```
 ================ PROCESS DISAPPEARED ================
@@ -112,6 +127,8 @@ com.example.app (pid 12345) was alive at the previous command and is GONE now.
 ```
 
 On Android, `ui` also detects the AOSP system crash dialog directly from the accessibility tree.
+
+The experimental tvOS backend does not yet provide cross-command process-liveness tracking; a WebDriver failure is transport evidence, not by itself proof that the app crashed.
 
 **Mandatory response:**
 1. **STOP.** Do not silently relaunch or continue.

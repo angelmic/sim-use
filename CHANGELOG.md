@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Experimental tvOS Simulator support through Appium/XCUITest: top-level `ui` and `screenshot`, the `sim-use tvos` namespace, and focus-aware `tvos remote <up|down|left|right|select|menu|play-pause|home>`. Each operation owns and closes a short-lived WebDriver session; `--bundle-id` (or `SIM_USE_TVOS_BUNDLE_ID` for top-level verbs) restores the target app after a cold WDA launch, and `SIM_USE_APPIUM_URL` overrides the default `http://127.0.0.1:4723` endpoint.
+
+### Changed
+
+- `sim-use devices` classifies `simctl` tvOS runtimes separately and accepts `--platform tvos`; `--platform ios` no longer includes tvOS rows.
+
 ### Fixed
 
 - The `SIM_USE_VERSION` build-time override actually reaches the version stamp now. `VersionPlugin` registered its generator command with an empty environment, so the documented "environment variable first" priority was dead code and every build fell back to `git describe` — release builds happened to be correct only because they build on the tagged commit, while `scripts/dev-install.sh` builds stamped a stale describe string. The override is now resolved in the plugin process and baked into the command's argv, which also makes a changed override invalidate SPM's command cache without requiring a source-file edit.

@@ -38,7 +38,7 @@ class Check:
 class Ctx:
     device: Optional[str] = None
     sim_use_bin: str = "sim-use"
-    platform: Optional[str] = None  # "ios" or "android", detected
+    platform: Optional[str] = None  # "ios", "tvos", or "android", detected
     errors: list = field(default_factory=list)
 
     def run_sim_use(self, *args: str, check: bool = False) -> subprocess.CompletedProcess:
@@ -146,6 +146,10 @@ def check_ui_responds(ctx: Ctx) -> bool:
 
 
 def autofix_daemon_restart(ctx: Ctx) -> bool:
+    # tvOS bypasses the sim-use daemon and uses a short-lived Appium
+    # session. Restarting iOS daemons cannot repair an Appium failure.
+    if ctx.platform == "tvos":
+        return False
     # `daemon stop --all` is mutually exclusive with `--device`, so bypass
     # run_sim_use (which appends --device when a device is set and would make
     # the command fail with "Specify either --device <id> or --all").
@@ -178,7 +182,7 @@ def shared_checks() -> list[Check]:
             run=check_ui_responds,
             on_fail="auto",
             autofix=autofix_daemon_restart,
-            fix_hint="Try: sim-use daemon stop --all, then retry.",
+            fix_hint="iOS/Android: try sim-use daemon stop --all. tvOS: start Appium (`appium --port 4723`) and verify the XCUITest driver is installed.",
         ),
     ]
 
