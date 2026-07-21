@@ -19,12 +19,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `sim-use devices` classifies `simctl` tvOS runtimes separately and accepts `--platform tvos`; `--platform ios` no longer includes tvOS rows.
+- `app-state` reports `"platform": "tvos"` for tvOS Simulators (previously `"ios"`); the underlying process probe is unchanged.
+- `tvos remote` waits 0.35 s after the press before sampling the after-focus, so the reported transition reflects where focus actually landed; tune or disable with `--settle-delay`.
 - The tap family (`tap`, `long-press`, `ios tap`) declares its shared flags once via `TapTargetingOptions` / `TapTimingOptions` option groups instead of three hand-kept copies (#42). Flag names, defaults, validation messages, and `--json` envelopes are unchanged; the only user-visible deltas are in `--help` output, where per-verb wording ("Tap the center…" / "Long-press the center…") unifies to verb-neutral phrasing ("Target the center…") and the timing flags render as a contiguous block after `--duration`.
 - `make e2e` now runs both the iOS and Android E2E suites in sequence (continuing past a platform failure and failing if either did); the iOS-only target is `make e2e-ios`, Android-only stays `make e2e-android`.
 - `scripts/test-runner.sh` keeps running after a failed suite and prints a full pass/fail map at the end (a release gate needs the whole picture, not the first crash). The hardcoded suite list gained the missing `KeyboardStateTests` and the new suites, and the misnamed `StreamVideoDebugTests` entry — which silently matched zero tests — now points at the real `StreamVideoDebugTest` suite.
 
 ### Fixed
 
+- Apple Simulator platform routing reads CoreSimulator's per-device `device.plist` (~1 ms) instead of forking `simctl list devices -j` (hundreds of ms) in every CLI invocation — `ui`, `screenshot`, and `record-video` lose a per-call fork, and long-lived daemons now see simulators created after they spawned. The simctl catalog remains as a fallback for custom device sets, and a fallback failure prints a warning instead of silently routing tvOS devices to the iOS backend.
+- Touch/typing/recording verbs aimed at a tvOS Simulator fail in-process with the focus-navigation hint instead of first auto-spawning a per-UDID daemon that can never serve them.
+- A failed Appium session DELETE no longer fails a tvOS command whose work had already completed; teardown is best-effort with a stderr warning.
+- The tvOS outline no longer drops the focused element when it is unlabeled, or when the WebDriver source emits a duplicate node (same role/label/frame) whose focused copy comes second — duplicates now merge their states.
+- A malformed Appium session id surfaces as a WebDriver-protocol error instead of crashing the CLI on a force-unwrapped URL.
 - Four E2E suites (KeyTests, KeyComboTests, KeySequenceTests, StreamVideoTests) still invoked the pre-0.5.x top-level verb forms and had failed ever since the five iOS-only verbs moved under the `ios` namespace; they now call `sim-use ios <verb>`.
 - KeyComboTests' Cmd+A test asserted a cleared text field reads nil/empty — an empty `UITextField` exposes its placeholder as the accessibility value, so the assertion could never pass. It now accepts the placeholder form.
 
