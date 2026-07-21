@@ -4,8 +4,9 @@
 
 | Namespace | Scope | Examples |
 |---|---|---|
-| `sim-use <verb>` | Cross-platform (iOS + Android) | `ui`, `tap`, `swipe`, `type`, `paste`, `button`, `gesture`, `screenshot`, `record-video`, `app-state` |
+| `sim-use <verb>` | Shared surface | `ui` and `screenshot` on iOS + tvOS + Android; touch/typing/recording verbs on iOS + Android |
 | `sim-use ios <verb>` | iOS Simulator only | `key`, `key-combo`, `key-sequence`, `stream-video`, `batch` |
+| `sim-use tvos <verb>` | tvOS Simulator only | `remote`, plus namespaced `ui` and `screenshot` |
 | `sim-use android <verb>` | Android device only | `init`, `devices`, `ping` |
 
 ## Device resolution
@@ -13,6 +14,19 @@
 `--device` is optional. Resolution order: `--device` flag → `$SIM_USE_DEVICE` env → only live daemon → only booted simulator.
 
 When multiple devices exist, pass `--device <UDID>` explicitly. Run `sim-use devices` to list all connected devices across platforms.
+
+## tvOS focus and remote
+
+```bash
+sim-use tvos ui --device <TV_UDID> --bundle-id <id>                 # find `focused`
+sim-use tvos remote down --device <TV_UDID> --bundle-id <id>        # move focus
+sim-use tvos remote select --device <TV_UDID> --bundle-id <id>      # activate
+sim-use tvos remote menu --device <TV_UDID> --bundle-id <id>        # back
+```
+
+Buttons: `up`, `down`, `left`, `right`, `select`, `menu`, `play-pause`, `home`. tvOS navigation is focus-driven; `tap`, `swipe`, `touch`, typing, and other coordinate actions intentionally fail with a tvOS-specific hint.
+
+`--bundle-id` is recommended whenever the target is known: Appium then restores it after a cold WDA launch. Top-level `ui` / `screenshot` read the same target from `SIM_USE_TVOS_BUNDLE_ID`.
 
 ## Selectors
 
@@ -163,7 +177,7 @@ sim-use daemon stop --all
 SIM_USE_NO_DAEMON=1 sim-use ui     # bypass daemon for one call
 ```
 
-Daemon is iOS-only (auto-spawned, 600s idle TTL). Android commands go through adb directly.
+Daemon is iOS-only (auto-spawned, 600s idle TTL). tvOS commands use short-lived Appium sessions; Android commands go through adb directly.
 
 ## iOS keyboard (HID keycodes)
 

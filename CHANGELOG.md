@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Experimental tvOS Simulator support through Appium/XCUITest: top-level `ui` and `screenshot`, the `sim-use tvos` namespace, and focus-aware `tvos remote <up|down|left|right|select|menu|play-pause|home>`. Each operation owns and closes a short-lived WebDriver session; `--bundle-id` (or `SIM_USE_TVOS_BUNDLE_ID` for top-level verbs) restores the target app after a cold WDA launch, and `SIM_USE_APPIUM_URL` overrides the default `http://127.0.0.1:4723` endpoint.
+
+### Changed
+
+- `sim-use devices` classifies `simctl` tvOS runtimes separately and accepts `--platform tvos`; `--platform ios` no longer includes tvOS rows.
+
+### Fixed
+
+
 ## [0.11.0] - 2026-07-23
 
 ### Added
