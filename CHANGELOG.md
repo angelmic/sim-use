@@ -14,9 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `sim-use devices` classifies `simctl` tvOS runtimes separately and accepts `--platform tvos`; `--platform ios` no longer includes tvOS rows.
+- `app-state` reports `"platform": "tvos"` for tvOS Simulators (previously `"ios"`); the underlying process probe is unchanged.
+- `tvos remote` waits 0.35 s after the press before sampling the after-focus, so the reported transition reflects where focus actually landed; tune or disable with `--settle-delay`.
 
 ### Fixed
 
+- Apple Simulator platform routing reads CoreSimulator's per-device `device.plist` (~1 ms) instead of forking `simctl list devices -j` (hundreds of ms) in every CLI invocation — `ui`, `screenshot`, and `record-video` lose a per-call fork, and long-lived daemons now see simulators created after they spawned. The simctl catalog remains as a fallback for custom device sets, and a fallback failure prints a warning instead of silently routing tvOS devices to the iOS backend.
+- Touch/typing/recording verbs aimed at a tvOS Simulator fail in-process with the focus-navigation hint instead of first auto-spawning a per-UDID daemon that can never serve them.
+- A failed Appium session DELETE no longer fails a tvOS command whose work had already completed; teardown is best-effort with a stderr warning.
+- The tvOS outline no longer drops the focused element when it is unlabeled, or when the WebDriver source emits a duplicate node (same role/label/frame) whose focused copy comes second — duplicates now merge their states.
+- A malformed Appium session id surfaces as a WebDriver-protocol error instead of crashing the CLI on a force-unwrapped URL.
 
 ## [0.11.0] - 2026-07-23
 
