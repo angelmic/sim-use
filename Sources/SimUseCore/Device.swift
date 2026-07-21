@@ -2,8 +2,8 @@
 import Foundation
 
 /// Cross-platform identifier for one connected device sim-use can target —
-/// an iOS Simulator runtime from `simctl list devices`, or an Android
-/// device / emulator from `adb devices`. The two platforms originally
+/// an iOS/tvOS Simulator runtime from `simctl list devices`, or an Android
+/// device / emulator from `adb devices`. The Apple and Android paths originally
 /// shipped with separate listing commands (`list-simulators`,
 /// `android devices`) and ad-hoc output shapes; `Device` is the unified
 /// row that the top-level `sim-use devices` verb emits so external
@@ -31,6 +31,7 @@ public struct Device: Codable, Equatable, Hashable, Sendable {
 
     public enum Platform: String, Codable, Sendable, CaseIterable {
         case ios
+        case tvos
         case android
     }
 
@@ -52,8 +53,8 @@ public struct Device: Codable, Equatable, Hashable, Sendable {
     public let name: String
     public let platform: Platform
     public let state: String
-    /// Human-readable runtime label. iOS: the simctl runtime
-    /// (`iOS 18.6`, `watchOS 26.1`); Android: `Android` (we don't fetch
+    /// Human-readable runtime label. Apple platforms: the simctl runtime
+    /// (`iOS 18.6`, `tvOS 18.2`); Android: `Android` (we don't fetch
     /// the OS version via adb to keep `devices` cheap). Nil when the
     /// platform genuinely has none to report.
     public let runtime: String?
@@ -98,13 +99,13 @@ public struct Device: Codable, Equatable, Hashable, Sendable {
         try c.encodeIfPresent(runtime, forKey: .runtime)
     }
 
-    /// Whether sim-use can talk to this device right now. iOS: only
-    /// `Booted` sims accept HID + a11y. Android: `device` is the online
+    /// Whether sim-use can talk to this device right now. iOS/tvOS: only
+    /// `Booted` sims accept UI operations. Android: `device` is the online
     /// state; `offline` / `unauthorized` aren't reachable through the
     /// bridge.
     public var isUsable: Bool {
         switch platform {
-        case .ios:     return state == State.iosBooted
+        case .ios, .tvos: return state == State.iosBooted
         case .android: return state == State.androidOnline
         }
     }

@@ -11,9 +11,9 @@ import iOSSimBackend
 struct Devices: SimUseExecutableCommand {
     static let configuration = CommandConfiguration(
         commandName: "devices",
-        abstract: "List connected devices across iOS Simulators and Android devices.",
+        abstract: "List connected devices across iOS/tvOS Simulators and Android devices.",
         discussion: """
-        Aggregates `xcrun simctl list devices` (iOS Simulators) and
+        Aggregates `xcrun simctl list devices` (iOS/tvOS Simulators) and
         `adb devices` (Android devices / emulators) into a single
         unified table.
 
@@ -26,6 +26,7 @@ struct Devices: SimUseExecutableCommand {
           sim-use devices                          # currently usable devices, both platforms
           sim-use devices --all                    # also include shutdown / offline
           sim-use devices --platform ios           # iOS Simulators only
+          sim-use devices --platform tvos          # tvOS Simulators only
           sim-use devices --json                   # structured output (Viewer, scripts, agents)
 
         JSON envelope (--json):
@@ -34,7 +35,7 @@ struct Devices: SimUseExecutableCommand {
             "data": {
               "devices": [
                 {"deviceId": "...",
-                 "name": "...", "platform": "ios|android",
+                 "name": "...", "platform": "ios|tvos|android",
                  "state": "Booted|Shutdown|device|offline|...", "runtime": "iOS 18.6|Android|..."},
                 ...
               ]
@@ -67,13 +68,12 @@ struct Devices: SimUseExecutableCommand {
         let iosResult = await iosFuture
         let androidResult = await androidFuture
 
-        var combined: [Device] = []
-        if platform != .android { combined.append(contentsOf: iosResult.devices) }
-        if platform != .ios     { combined.append(contentsOf: androidResult.devices) }
-
-        if !includeAll {
-            combined = combined.filter { $0.isUsable }
-        }
+        var combined = Self.filterDevices(
+            appleDevices: iosResult.devices,
+            androidDevices: androidResult.devices,
+            platform: platform,
+            includeAll: includeAll
+        )
 
         combined.sort { lhs, rhs in
             if lhs.platform != rhs.platform { return lhs.platform.rawValue < rhs.platform.rawValue }
@@ -89,10 +89,33 @@ struct Devices: SimUseExecutableCommand {
         // something more actionable than "No devices found".
         if combined.isEmpty, iosResult.failed, androidResult.failed, platform == nil {
             FileHandle.standardError.write(Data(
-                "warning: both iOS (simctl) and Android (adb) listings failed; pass --platform ios|android to scope, or install the missing tooling.\n".utf8
+                "warning: both Apple Simulator (simctl) and Android (adb) listings failed; pass --platform ios|tvos|android to scope, or install the missing tooling.\n".utf8
             ))
         }
         return ExecutionResult(devices: combined)
+    }
+
+    /// Apply platform selection after `simctl` returns its mixed Apple
+    /// runtime list. In particular, `--platform ios` must not leak tvOS
+    /// rows, and `--platform tvos` must not trigger or include adb.
+    static func filterDevices(
+        appleDevices: [Device],
+        androidDevices: [Device],
+        platform: Device.Platform?,
+        includeAll: Bool
+    ) -> [Device] {
+        var devices: [Device]
+        switch platform {
+        case .ios:
+            devices = appleDevices.filter { $0.platform == .ios }
+        case .tvos:
+            devices = appleDevices.filter { $0.platform == .tvos }
+        case .android:
+            devices = androidDevices
+        case .none:
+            devices = appleDevices + androidDevices
+        }
+        return includeAll ? devices : devices.filter(\.isUsable)
     }
 
     /// Each side of the parallel listing reports `(devices, failed)`
@@ -122,7 +145,9 @@ struct Devices: SimUseExecutableCommand {
     }
 
     private func listAndroid() async -> SideResult {
-        if platform == .ios { return SideResult(devices: [], failed: false) }
+        if platform != nil, platform != .android {
+            return SideResult(devices: [], failed: false)
+        }
         do {
             // adb may simply be unavailable on hosts that don't do
             // Android work; that's not an error worth derailing the

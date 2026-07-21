@@ -109,11 +109,12 @@ public enum SimctlDeviceLister {
         var devices: [Device] = []
         for (runtimeId, raws) in envelope.devices {
             let runtime = friendlyRuntime(runtimeId)
+            let platform: Device.Platform = runtimeId.contains(".tvOS-") ? .tvos : .ios
             for raw in raws {
                 devices.append(Device(
                     udid: raw.udid,
                     name: raw.name,
-                    platform: .ios,
+                    platform: platform,
                     state: raw.state,
                     runtime: runtime
                 ))
