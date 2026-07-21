@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import Foundation
 
-/// Cross-platform `describe-ui` envelope. Both iOS and Android backends
+/// Cross-platform `describe-ui` envelope. iOS, tvOS, and Android backends
 /// produce this shape; the `platform` discriminator tells consumers
 /// which schema `raw` follows. See plan §"Locked decisions — backend
 /// parsing shape" (S1–S3) for rationale.
@@ -12,12 +12,13 @@ public struct DescribeUIResult: Codable, Equatable, Sendable {
         // `.ios` / `.android` uniformly; the wire raw value is `"ios"`
         // either way so the JSON envelope is unaffected.
         case ios
+        case tvos
         case android
     }
 
     public let platform: Platform
-    /// Platform-passthrough raw tree. iOS = AX tree shape; Android =
-    /// bridge `ElementNode` tree shape. Different schemas, both
+    /// Platform-passthrough raw tree. iOS = AX tree shape; tvOS = raw
+    /// WebDriver XML string; Android = bridge `ElementNode` tree shape. Different schemas, all
     /// documented under `schemas/`.
     ///
     /// `nil` when the caller did not request `--json` — the raw tree is
