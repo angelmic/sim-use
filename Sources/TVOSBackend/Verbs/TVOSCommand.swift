@@ -14,6 +14,7 @@ public struct TVOSCommand: ParsableCommand {
             TVOSDescribeUICommand.self,
             TVOSRemoteCommand.self,
             TVOSScreenshotCommand.self,
+            TVOSTypeCommand.self,
         ]
     )
 

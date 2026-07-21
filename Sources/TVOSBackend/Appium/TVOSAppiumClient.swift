@@ -131,6 +131,40 @@ public struct TVOSAppiumClient: Sendable {
         return data
     }
 
+    fileprivate func findElement(
+        className: String,
+        sessionID: String
+    ) async throws -> String {
+        let body = FindElementRequest(using: "class name", value: className)
+        let response = try await send(
+            method: "POST",
+            path: "/session/\(sessionID)/element",
+            body: try JSONEncoder().encode(body)
+        )
+        let element = try decodeValue([String: String].self, from: response)
+        // W3C wraps the id under a spec-defined key; take the first value
+        // so the legacy ELEMENT key keeps working too.
+        guard let elementID = element.values.first, !elementID.isEmpty,
+              elementID.range(of: "^[A-Za-z0-9._:-]+$", options: .regularExpression) != nil
+        else {
+            throw TVOSAppiumError.invalidResponse("find-element response did not include a usable element id")
+        }
+        return elementID
+    }
+
+    fileprivate func sendKeys(
+        _ text: String,
+        elementID: String,
+        sessionID: String
+    ) async throws {
+        let response = try await send(
+            method: "POST",
+            path: "/session/\(sessionID)/element/\(elementID)/value",
+            body: try JSONEncoder().encode(SendKeysRequest(text: text))
+        )
+        try validate(response)
+    }
+
     private func createSession(udid: String, bundleId: String?) async throws -> String {
         let body = SessionRequest(
             capabilities: .init(alwaysMatch: .init(udid: udid, bundleId: bundleId))
@@ -227,6 +261,14 @@ struct TVOSAppiumSession: Sendable {
     func screenshot() async throws -> Data {
         try await client.screenshot(sessionID: id)
     }
+
+    func findElement(className: String) async throws -> String {
+        try await client.findElement(className: className, sessionID: id)
+    }
+
+    func sendKeys(_ text: String, elementID: String) async throws {
+        try await client.sendKeys(text, elementID: elementID, sessionID: id)
+    }
 }
 
 private struct SessionRequest: Encodable {
@@ -282,6 +324,15 @@ private struct ExecuteRequest: Encodable {
 
     let script: String
     let args: [Argument]
+}
+
+private struct FindElementRequest: Encodable {
+    let using: String
+    let value: String
+}
+
+private struct SendKeysRequest: Encodable {
+    let text: String
 }
 
 private struct ValueEnvelope<Value: Decodable>: Decodable {

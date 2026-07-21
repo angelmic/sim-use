@@ -133,6 +133,74 @@ final class TVOSControllerTests: XCTestCase {
         XCTAssertEqual(requests.last?.method, "DELETE")
     }
 
+    func testTypeTextOpensKeyboardSendsStringAndCommits() async throws {
+        let transport = MockTransport(responses: [
+            response(value: SessionValue(sessionId: "session-6")),
+            response(value: textFieldSource()),
+            response(value: Optional<String>.none), // select opens the keyboard
+            response(value: ["element-6066-11e4-a52e-4f735466cecf": "EL-1"]),
+            response(value: Optional<String>.none), // sendKeys
+            response(value: Optional<String>.none), // menu commits
+            response(value: Optional<String>.none), // delete session
+        ])
+        let controller = makeController(transport: transport)
+
+        let result = try await controller.typeText("hi there", udid: tvosUDID)
+
+        XCTAssertEqual(result.text, "hi there")
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(requests.map { $0.url.path }, [
+            "/session",
+            "/session/session-6/source",
+            "/session/session-6/execute/sync",
+            "/session/session-6/element",
+            "/session/session-6/element/EL-1/value",
+            "/session/session-6/execute/sync",
+            "/session/session-6",
+        ])
+        let sendKeys = try XCTUnwrap(requests.first(where: { $0.url.path.hasSuffix("/value") }))
+        let body = try JSONDecoder().decode([String: String].self, from: try XCTUnwrap(sendKeys.body))
+        XCTAssertEqual(body["text"], "hi there")
+    }
+
+    func testTypeTextSkipsSelectWhenKeyboardAlreadyOpen() async throws {
+        let transport = MockTransport(responses: [
+            response(value: SessionValue(sessionId: "session-7")),
+            response(value: textFieldSource(keyboardOpen: true)),
+            response(value: ["element-6066-11e4-a52e-4f735466cecf": "EL-2"]),
+            response(value: Optional<String>.none), // sendKeys
+            response(value: Optional<String>.none), // menu commits
+            response(value: Optional<String>.none), // delete session
+        ])
+        let controller = makeController(transport: transport)
+
+        _ = try await controller.typeText("hi", udid: tvosUDID)
+
+        let requests = await transport.recordedRequests()
+        let executes = requests.filter { $0.url.path.hasSuffix("/execute/sync") }
+        XCTAssertEqual(executes.count, 1, "select must be skipped when the keyboard is already up")
+    }
+
+    func testTypeTextWithoutFocusedTextFieldFailsWithHint() async throws {
+        let transport = MockTransport(responses: [
+            response(value: SessionValue(sessionId: "session-8")),
+            response(value: settingsSource(focusedLabel: "一般")), // focused Cell, not a text field
+            response(value: Optional<String>.none), // delete session
+        ])
+        let controller = makeController(transport: transport)
+
+        do {
+            _ = try await controller.typeText("hi", udid: tvosUDID)
+            XCTFail("Expected TVOSTypeError")
+        } catch let error as TVOSTypeError {
+            XCTAssertEqual(error.focusedRole, "Cell")
+            XCTAssertTrue((error.hint ?? "").contains("tvos remote"))
+        }
+
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(requests.last?.method, "DELETE", "the session must still be cleaned up")
+    }
+
     func testConnectionFailureIncludesAppiumSetupHint() async {
         let transport = MockTransport(responses: [.failure(URLError(.cannotConnectToHost))])
         let controller = makeController(transport: transport)
@@ -251,6 +319,21 @@ private func webdriverError(
     {"value":{"error":"unknown error","message":"\(message)"}}
     """
     return .success(TVOSAppiumResponse(statusCode: statusCode, body: Data(body.utf8)))
+}
+
+private func textFieldSource(keyboardOpen: Bool = false) -> String {
+    let keyboard = keyboardOpen
+        ? #"<XCUIElementTypeKeyboard type="XCUIElementTypeKeyboard" name="Keyboard" label="Keyboard" enabled="true" visible="true" focused="true" x="0" y="448" width="1920" height="227" />"#
+        : ""
+    return """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <AppiumAUT>
+      <XCUIElementTypeApplication type="XCUIElementTypeApplication" name="SimUsePlaygroundTV" label="SimUsePlaygroundTV" enabled="true" visible="true" focused="false" x="0" y="0" width="1920" height="1080" bundleId="com.cameroncooke.SimUsePlaygroundTV">
+        <XCUIElementTypeTextField type="XCUIElementTypeTextField" name="text-input" label="text-input" enabled="true" visible="true" focused="\(!keyboardOpen)" x="145" y="568" width="1630" height="73" />
+        \(keyboard)
+      </XCUIElementTypeApplication>
+    </AppiumAUT>
+    """
 }
 
 private func settingsSource(focusedLabel: String) -> String {
