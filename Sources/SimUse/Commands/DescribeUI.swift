@@ -4,6 +4,7 @@ import Foundation
 import SimUseCore
 import AndroidBackend
 import iOSSimBackend
+import TVOSBackend
 
 /// Top-level cross-platform `describe-ui` verb. Owns the flag surface
 /// and resolves the target platform, then delegates to the per-backend
@@ -15,12 +16,19 @@ import iOSSimBackend
 struct DescribeUI: SimUseExecutableCommand {
     typealias ExecutionResult = IOSSimDescribeUICommand.ExecutionResult
 
+    enum ExecutionBackend: Equatable {
+        case android
+        case iOSSimulator
+        case tvOSSimulator
+    }
+
     static let configuration = CommandConfiguration(
         abstract: "Describes the UI hierarchy of a booted simulator using accessibility information.",
         aliases: ["ui"]
     )
 
     @OptionGroup var device: DeviceOptions
+    @OptionGroup var tvosTarget: TVOSTargetOptions
 
     @Option(
         name: .customLong("point"),
@@ -77,6 +85,12 @@ struct DescribeUI: SimUseExecutableCommand {
 
     var jsonOutput: Bool { json.enabled }
 
+    /// tvOS uses its own short-lived Appium session and must not be routed
+    /// through the iOS FBSimulator daemon.
+    var daemonBypass: Bool {
+        Self.executionBackend(for: PlatformRouter.resolve(udid: device.resolved)) == .tvOSSimulator
+    }
+
     @Flag(
         name: .customLong("include-offscreen"),
         help: "Android-only. Include nodes whose `isVisibleToUser` is false (recycled list cells, off-screen ViewPager neighbours, fragments mid-detach). Default is to filter them out — they pad the outline with rows the user can't actually see. Ignored on iOS (the iOS pipeline has no equivalent visibility flag)."
@@ -100,11 +114,24 @@ struct DescribeUI: SimUseExecutableCommand {
     }
 
     func execute() async throws -> ExecutionResult {
-        switch PlatformRouter.resolve(udid: device.resolved) {
+        switch Self.executionBackend(for: PlatformRouter.resolve(udid: device.resolved)) {
         case .android:
             return try executeAndroid()
-        case .iOSSim, .none:
+        case .tvOSSimulator:
+            return try await executeTVOS()
+        case .iOSSimulator:
             return try await executeIOSSim()
+        }
+    }
+
+    static func executionBackend(for platform: Platform?) -> ExecutionBackend {
+        switch platform {
+        case .android:
+            return .android
+        case .tvOSSim:
+            return .tvOSSimulator
+        case .iOSSim, .none:
+            return .iOSSimulator
         }
     }
 
@@ -115,6 +142,33 @@ struct DescribeUI: SimUseExecutableCommand {
     private func executeIOSSim() async throws -> ExecutionResult {
         let sub = makeIOSSubcommand()
         return try await sub.execute()
+    }
+
+    private func executeTVOS() async throws -> ExecutionResult {
+        let sub = makeTVOSSubcommand()
+        let result = try await sub.execute()
+        return ExecutionResult(
+            platform: result.platform.rawValue,
+            raw: result.raw,
+            outline: result.outline,
+            entries: result.entries,
+            lists: result.lists,
+            screen: result.screen,
+            appLabel: result.appLabel,
+            appPackage: result.appPackage,
+            crashDialog: result.crashDialog
+        )
+    }
+
+    /// Construct the tvOS backend command and copy every parsed flag across.
+    /// In particular, the target bundle keeps a cold WDA launch from leaving
+    /// the source request attached to the tvOS Home screen.
+    func makeTVOSSubcommand() -> TVOSDescribeUICommand {
+        var sub = TVOSDescribeUICommand()
+        sub.device = device
+        sub.target = tvosTarget
+        sub.json = json
+        return sub
     }
 
     /// Construct the backend command and copy every parsed flag across.

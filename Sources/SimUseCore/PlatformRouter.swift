@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 import Foundation
 
-/// The platforms `sim-use` can target. Today: iOS Simulator and Android.
+/// The platforms `sim-use` can target. Today: iOS/tvOS Simulator and Android.
 /// Future: real iOS devices (likely WebDriverAgent-backed) would slot in
 /// as an additional case.
-public enum Platform: Equatable {
+public enum Platform: Equatable, Sendable {
     case iOSSim
+    case tvOSSim
     case android
 }
 
@@ -26,15 +27,20 @@ public enum PlatformRouter {
     /// Classify a UDID into a target platform. Returns `nil` when the
     /// shape doesn't fit any known platform; callers can choose to fail
     /// fast or fall back to a default.
-    public static func resolve(udid: String) -> Platform? {
+    public static func resolve(
+        udid: String,
+        simulatorPlatformLookup: (String) -> Platform? = SimulatorPlatformResolver.livePlatform(for:)
+    ) -> Platform? {
         let trimmed = udid.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return nil }
         if looksLikeAndroid(trimmed) { return .android }
-        if looksLikeIOSSim(trimmed) { return .iOSSim }
+        if looksLikeIOSSim(trimmed) {
+            return simulatorPlatformLookup(trimmed) ?? .iOSSim
+        }
         return nil
     }
 
-    /// `true` when the UDID looks like an iOS Simulator UDID
+    /// `true` when the UDID looks like an Apple Simulator UDID
     /// (8-4-4-4-12 hex, as emitted by `simctl list`).
     public static func looksLikeIOSSim(_ udid: String) -> Bool {
         let pattern = "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
@@ -45,7 +51,7 @@ public enum PlatformRouter {
     ///
     /// Heuristic, in order:
     ///   1. `emulator-…` prefix → always Android.
-    ///   2. iOS Simulator UDID shape → never Android.
+    ///   2. Apple Simulator UDID shape → never Android.
     ///   3. ASCII-only, length 4–32, allowed `[A-Za-z0-9._:-]`, with at
     ///      least one digit → Android.
     ///

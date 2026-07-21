@@ -171,6 +171,7 @@ let package = Package(
                 "SimUseVideo",
                 "AndroidBackend",
                 "iOSSimBackend",
+                "TVOSBackend",
                 "FBSimulatorControl",
                 "FBControlCore",
                 "XCTestBootstrap",

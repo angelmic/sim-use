@@ -100,6 +100,8 @@ struct Touch: SimUseExecutableCommand {
         switch PlatformRouter.resolve(udid: device.resolved) {
         case .android:
             return try executeAndroid()
+        case .tvOSSim:
+            throw TVOSCapabilityError(command: "touch")
         case .iOSSim, .none:
             return try await executeIOSSim()
         }

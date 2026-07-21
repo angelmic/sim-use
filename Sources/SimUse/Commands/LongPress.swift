@@ -102,6 +102,8 @@ struct LongPress: SimUseExecutableCommand {
         switch PlatformRouter.resolve(udid: device.resolved) {
         case .android:
             return try executeAndroid()
+        case .tvOSSim:
+            throw TVOSCapabilityError(command: "long-press")
         case .iOSSim, .none:
             return try await executeIOSSim()
         }
