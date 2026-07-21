@@ -131,7 +131,7 @@ private extension TVOSOutlineRenderer {
         var screen = Outline.Frame(x: 0, y: 0, width: 0, height: 0)
         var elements: [Element] = []
         private var depth = 0
-        private var seen: Set<ElementKey> = []
+        private var indexByKey: [ElementKey: Int] = [:]
 
         func parser(
             _ parser: XMLParser,
@@ -170,7 +170,24 @@ private extension TVOSOutlineRenderer {
             if attributeDict["enabled"] == "false" { states.append("disabled") }
             if attributeDict["selected"] == "true" { states.append("selected") }
             let key = ElementKey(role: role, label: label, frame: frame)
-            guard seen.insert(key).inserted else { return }
+            if let existingIndex = indexByKey[key] {
+                // WebDriver source can emit the same element twice (e.g. a
+                // focus overlay sharing the cell's role/label/frame). Keep
+                // one row but union the states, so a `focused` duplicate is
+                // not silently dropped — focus is the platform's cursor and
+                // must survive dedup.
+                let existing = elements[existingIndex]
+                let mergedStates = existing.states + states.filter { !existing.states.contains($0) }
+                elements[existingIndex] = Element(
+                    role: existing.role,
+                    label: existing.label,
+                    frame: existing.frame,
+                    states: mergedStates,
+                    depth: existing.depth
+                )
+                return
+            }
+            indexByKey[key] = elements.count
             elements.append(Element(role: role, label: label, frame: frame, states: states, depth: max(0, depth - 1)))
         }
 
