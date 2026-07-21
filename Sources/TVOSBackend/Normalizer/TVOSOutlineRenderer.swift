@@ -157,16 +157,24 @@ private extension TVOSOutlineRenderer {
                 return
             }
 
+            let isFocused = attributeDict["focused"] == "true"
             guard attributeDict["visible"] != "false",
                   frame.width > 0,
-                  frame.height > 0,
-                  let label = nonEmpty(attributeDict["label"])
-                    ?? nonEmpty(attributeDict["name"])
-                    ?? nonEmpty(attributeDict["value"])
+                  frame.height > 0
             else { return }
 
+            // Unlabeled chrome is normally dropped to keep the outline
+            // small — but focus is the platform's cursor, so an element
+            // that carries it must stay visible even without text;
+            // otherwise `remote` reports "no focused element" while focus
+            // exists. It renders with an empty label and its role.
+            let text = nonEmpty(attributeDict["label"])
+                ?? nonEmpty(attributeDict["name"])
+                ?? nonEmpty(attributeDict["value"])
+            guard let label = text ?? (isFocused ? "" : nil) else { return }
+
             var states: [String] = []
-            if attributeDict["focused"] == "true" { states.append("focused") }
+            if isFocused { states.append("focused") }
             if attributeDict["enabled"] == "false" { states.append("disabled") }
             if attributeDict["selected"] == "true" { states.append("selected") }
             let key = ElementKey(role: role, label: label, frame: frame)
