@@ -60,34 +60,36 @@ After any non-trivial change, at minimum:
 
 ## Module layout
 
-Four SwiftPM targets; dependency graph flows in one direction.
+Five SwiftPM targets; dependency graph flows in one direction.
 
 | Target | Path | Depends on |
 |---|---|---|
 | `SimUseCore` | `Sources/SimUseCore/` | Foundation + ArgumentParser |
 | `iOSSimBackend` | `Sources/iOSSimBackend/` | SimUseCore + FB* XCFrameworks + AVFoundation |
 | `AndroidBackend` | `Sources/AndroidBackend/` | SimUseCore + ArgumentParser |
-| `SimUse` (executable) | `Sources/SimUse/` | SimUseCore + iOSSimBackend + AndroidBackend + FB* |
+| `TVOSBackend` | `Sources/TVOSBackend/` | SimUseCore + ArgumentParser |
+| `SimUse` (executable) | `Sources/SimUse/` | SimUseCore + iOSSimBackend + AndroidBackend + TVOSBackend + FB* |
 
 ### Verb dispatch
 
-A verb (tap, swipe, type, ...) reaches three surfaces:
+A shared verb reaches up to four surfaces:
 
-1. **Top-level** — `Sources/SimUse/Commands/<Verb>.swift`. Resolves the target via `PlatformRouter`, then forwards to the iOS or Android backend.
+1. **Top-level** — `Sources/SimUse/Commands/<Verb>.swift`. Resolves the target via `PlatformRouter`, then forwards to the owning backend. tvOS currently participates in `describe-ui` and `screenshot`; touch/typing verbs reject it with a focus-navigation hint.
 2. **`sim-use ios <verb>`** — `Sources/iOSSimBackend/Verbs/IOSSim<Verb>Command.swift`.
 3. **`sim-use android <verb>`** — `Sources/AndroidBackend/Verbs/Android<Verb>Command.swift`.
+4. **`sim-use tvos <verb>`** — `Sources/TVOSBackend/Verbs/TVOS<Verb>Command.swift`. tvOS adds the focus-specific `remote` verb rather than coordinate gestures.
 
 Five verbs are iOS-only (`key`, `key-combo`, `key-sequence`, `stream-video`, `batch`) — no top-level alias.
 
 ### Adding a new verb
 
-- **Cross-platform**: write `IOSSim<Verb>Command` + `Android<Verb>Command`, plus a top-level forwarder in `Sources/SimUse/Commands/<Verb>.swift`. Register in `IOSSimCommand.swift`, `AndroidCommand.swift`, and `main.swift`.
+- **Cross-platform**: write the relevant backend commands, plus a top-level forwarder in `Sources/SimUse/Commands/<Verb>.swift`. Register in each participating namespace and `main.swift`. Only opt tvOS in when the verb has focus-driven semantics or an Appium equivalent.
 - **iOS-only**: write `IOSSim<Verb>Command`, register in `IOSSimCommand` only. Use `HIDKeyCommandHelp.androidUnsupportedMessage` to reject Android UDIDs (see `IOSSimKeyCommand`).
-- **Shared flags**: `@OptionGroup var udid: UDIDOptions` + `@OptionGroup var json: JSONOutputOptions`.
+- **Shared flags**: `@OptionGroup var device: DeviceOptions` + `@OptionGroup var json: JSONOutputOptions`.
 
 ### Daemon
 
-`SimUseExecutableCommand.run()` forwards UDID-scoped verbs to a per-UDID auto-spawned daemon (`Sources/SimUseCore/Daemon/`). Platform-agnostic — both iOS and Android verbs route through it. Key regression test: `Tests/DaemonCommandParserInjectionTests.swift`.
+`SimUseExecutableCommand.run()` forwards eligible UDID-scoped verbs to a per-UDID auto-spawned daemon (`Sources/SimUseCore/Daemon/`). iOS and Android verbs can route through it; tvOS commands deliberately bypass it because each operation owns a short-lived Appium session. Key regression test: `Tests/DaemonCommandParserInjectionTests.swift`.
 
 ## Android development
 

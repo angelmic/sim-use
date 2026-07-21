@@ -3,7 +3,7 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Tests](https://github.com/lycorp-jp/sim-use/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/lycorp-jp/sim-use/actions/workflows/tests.yml)
 
-Give AI agents the ability to observe and act on iOS Simulator and Android emulator / device screens.
+Give AI agents the ability to observe and act on iOS Simulator, tvOS Simulator, and Android emulator / device screens.
 
 **Observe** — turn any screen into a token-efficient outline an LLM can reason about:
 
@@ -24,7 +24,7 @@ App: Settings  402x874
   @43 TabBar
 ```
 
-**Act** — tap any element by its alias, no coordinates needed:
+**Act** — on touch platforms, tap any element by its alias, no coordinates needed:
 
 ```text
 $ sim-use tap @9
@@ -33,7 +33,7 @@ $ sim-use tap @9
 
 Plan, code, **verify**, ship — teach this CLI to your agent and close the last gap in the agentic mobile development loop. Let agents verify what they built so you can focus on what matters.
 
-`sim-use` is a cross-platform CLI that drives Apple's Accessibility APIs, the iOS Simulator HID pipeline, and Android's AccessibilityService through a single command surface. It emits a compact, agent-friendly screen description (`ui`) and an alias-cached tap shortcut (`tap @N`) so an LLM loop can observe → act in a few hundred milliseconds per round trip.
+`sim-use` is a cross-platform CLI that drives Apple's Accessibility APIs, the iOS Simulator HID pipeline, tvOS focus navigation through Appium/XCUITest, and Android's AccessibilityService through a single command surface. It emits a compact, agent-friendly screen description (`ui`) and gives each platform a native action surface: alias-cached taps (`tap @N`) on touch screens, remote-button focus movement on tvOS.
 
 
 - [The observe → act loop](#the-observe--act-loop)
@@ -70,6 +70,8 @@ current rotation on each command and maps outline coordinates onto the
 framebuffer before dispatching (iOS). Explicit `-x/-y`/`--point` is always
 interpreted in the device-native portrait space.
 
+On tvOS, the same loop uses focus instead of coordinates: read the entry marked `focused`, then issue `sim-use tvos remote <direction|select|menu>`.
+
 
 ## Why sim-use
 
@@ -77,7 +79,7 @@ interpreted in the device-native portrait space.
 - **Nothing hidden.** sim-use walks the full accessibility tree including WebViews, system overlays, and embedded content — no elements are silently skipped.
 - **AI-native.** Designed from day one for agent loops, not human testers. Alias-cached taps (`@N`), structured `--json` envelopes with actionable `hint` fields on errors, and a bundled agent skill (`sim-use init --client claude`) that teaches your AI client the full command surface.
 - **Fast.** A per-device background daemon amortises init cost across calls. After the first command, each observe-act round trip completes in ~300 ms.
-- **Cross-platform.** One command surface drives both iOS Simulator and Android emulator/device. Same verbs, same flags, same `--json` shape — write one agent loop that works on both.
+- **Cross-platform.** One command surface drives iOS Simulator, tvOS Simulator, and Android emulator/device. `ui`, `screenshot`, and the `--json` envelope are shared; touch platforms keep selectors and gestures, while tvOS exposes its native focus/remote model.
 
 
 ## Install
@@ -126,20 +128,35 @@ sim-use init --uninstall --client claude
 
 ## Platforms
 
-sim-use drives both **iOS Simulators** and **Android devices / emulators** through the same command surface. The device ID shape decides which backend handles the call:
+sim-use drives **iOS Simulators**, **tvOS Simulators**, and **Android devices / emulators** through the same command surface. Android serials are recognised by shape; Apple Simulator UUIDs are resolved against their installed runtime:
 
-  * `1A2B3C4D-...` (UUID) → iOS Simulator
+  * `1A2B3C4D-...` (UUID) → iOS or tvOS Simulator, resolved through `simctl`
   * `emulator-5554` / `R5CT1ABCD12` / `192.168.1.5:5555` → Android device
 
 For Android, run `sim-use android init --device <serial>` once to install the bridge APK. See `AGENTS.md` for Android toolchain setup.
 
+tvOS support is experimental and uses Appium's XCUITest driver. Start Appium before the first tvOS command (the default endpoint is `http://127.0.0.1:4723`):
+
+```bash
+npm install -g appium
+appium driver install xcuitest
+appium --port 4723
+
+# Optional when Appium runs elsewhere:
+export SIM_USE_APPIUM_URL=http://127.0.0.1:4725
+
+# Optional target for top-level `ui` / `screenshot`:
+export SIM_USE_TVOS_BUNDLE_ID=com.example.TVApp
+```
+
 
 ## Commands
 
-All device-scoped commands accept `--device <ID>` (optional when only one simulator is booted). Three command layers:
+All device-scoped commands accept `--device <ID>` (optional when only one simulator is booted). Four command layers:
 
-  * **Top-level** — cross-platform verbs: `ui`, `tap`, `swipe`, `type`, `paste`, `button`, `gesture`, `keyboard-state`, `screenshot`, `record-video`, `app-state`. Same flags on iOS and Android.
+  * **Top-level** — shared verbs. `ui` and `screenshot` support all three platforms; touch/typing/recording verbs support iOS and Android and fail fast with a tvOS-specific hint.
   * **`sim-use ios <verb>`** — iOS-only: `key`, `key-combo`, `key-sequence`, `stream-video`, `batch`.
+  * **`sim-use tvos <verb>`** — tvOS-only: `remote`; `ui` and `screenshot` are also exposed here for symmetry.
   * **`sim-use android <verb>`** — Android-only: `init`, `devices`, `ping`.
 
 Run `sim-use --help` or `sim-use <command> --help` for the full flag set.
@@ -179,6 +196,23 @@ sim-use gesture scroll-down --pre-delay 0.5 --post-delay 1.0 --device $UDID
 ```
 
 `--pre-delay` / `--post-delay` / `--duration` work on `tap`, `swipe`, and `gesture` alike for coarse timing control.
+
+### tvOS focus navigation
+
+tvOS is focus-driven rather than coordinate-driven. Observe the element carrying the `focused` state, press a Siri Remote direction or button, then observe again:
+
+```bash
+TV_UDID="8737CB71-6462-41EC-B13E-E7C5E8F033E9"
+TV_BUNDLE_ID="com.example.TVApp"
+sim-use tvos ui --device $TV_UDID --bundle-id $TV_BUNDLE_ID
+sim-use tvos remote down --device $TV_UDID --bundle-id $TV_BUNDLE_ID
+sim-use tvos remote select --device $TV_UDID --bundle-id $TV_BUNDLE_ID
+sim-use tvos remote menu --device $TV_UDID --bundle-id $TV_BUNDLE_ID
+```
+
+Available buttons: `up`, `down`, `left`, `right`, `select`, `menu`, `play-pause`, and `home`. The text result includes the focused element before and after the action; `--json` returns both entries structurally. Coordinate touch verbs are intentionally unsupported on tvOS.
+
+Pass `--bundle-id` to a namespaced tvOS command when the target app is known. A cold WebDriverAgent launch can briefly take the foreground; the bundle id makes Appium restore the intended app before the command reads source or sends a remote button. Without it, sim-use attaches to whichever app is foreground. Top-level `ui` and `screenshot` use `SIM_USE_TVOS_BUNDLE_ID` for the same purpose.
 
 ### Text input
 
@@ -296,14 +330,14 @@ The output path goes to stdout; progress messages go to stderr.
 ### Video streaming & recording
 
 ```bash
-# MJPEG stream (iOS-only — no Android stream-video implementation)
+# MJPEG stream (iOS-only — no Android/tvOS stream-video implementation)
 sim-use ios stream-video --device $UDID --fps 10 --format mjpeg > stream.mjpeg
 
 # Pipe into ffmpeg
 sim-use ios stream-video --device $UDID --fps 30 --format ffmpeg | \
   ffmpeg -f image2pipe -framerate 30 -i - -c:v libx264 -preset ultrafast out.mp4
 
-# Record MP4 directly (cross-platform)
+# Record MP4 directly (iOS + Android)
 sim-use record-video --device $UDID --fps 15 --output recording.mp4
 sim-use record-video --device $UDID --fps 10 --quality 60 --scale 0.5 --output low-bw.mp4
 ```
@@ -345,12 +379,12 @@ sim-use daemon stop --all
 SIM_USE_NO_DAEMON=1 sim-use ui --device $UDID
 ```
 
-Daemons self-exit after 600 s of idle and log to `/tmp/sim-use-<uid>/<UDID>.log`. Streaming commands (`screenshot`, `record-video`, `stream-video`) always run in-process regardless.
+Daemons self-exit after 600 s of idle and log to `/tmp/sim-use-<uid>/<UDID>.log`. Streaming commands (`screenshot`, `record-video`, `stream-video`) always run in-process regardless. tvOS commands also stay in-process because each operation owns a short-lived Appium session.
 
 
 ## Architecture
 
-sim-use drives iOS Simulators through the lower-level XCFrameworks of Facebook's [idb](https://github.com/facebook/idb), Apple's Accessibility APIs, and the simulator HID pipeline. Android devices are driven through an on-device bridge APK that exposes the AccessibilityService tree and input injection over HTTP, tunnelled via `adb forward`.
+sim-use drives iOS Simulators through the lower-level XCFrameworks of Facebook's [idb](https://github.com/facebook/idb), Apple's Accessibility APIs, and the simulator HID pipeline. tvOS Simulator uses Appium's XCUITest driver for WebDriver source, screenshots, and Siri Remote button events; every command creates and closes its own session. Android devices are driven through an on-device bridge APK that exposes the AccessibilityService tree and input injection over HTTP, tunnelled via `adb forward`.
 
 - **Single binary, single invocation.** No RPC daemon to manage manually; the optional per-UDID background daemon is auto-spawned and opt-out (`SIM_USE_NO_DAEMON=1`).
 - **Agent-first output.** `ui` emits a compact outline with stable `@N` / `#<id>` aliases designed to round-trip between an LLM and the simulator with minimal token cost.
