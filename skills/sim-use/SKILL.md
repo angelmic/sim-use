@@ -55,6 +55,7 @@ sim-use tvos remote down --device <UDID> --bundle-id <id>
 sim-use tvos remote right --device <UDID> --bundle-id <id>
 sim-use tvos remote select --device <UDID> --bundle-id <id>
 sim-use tvos remote menu --device <UDID> --bundle-id <id>
+sim-use tvos type 'query text' --device <UDID> --bundle-id <id>   # into the focused text field
 ```
 
 ### Verify
@@ -78,6 +79,7 @@ sim-use screenshot --device <UDID> --output after.png
 | tvOS move focus | `sim-use tvos remote up\|down\|left\|right --device <UDID>` |
 | tvOS activate focus | `sim-use tvos remote select --device <UDID>` |
 | tvOS go back | `sim-use tvos remote menu --device <UDID>` |
+| tvOS type into a field | Focus the field (`TextField` + `focused` in `ui`), then `sim-use tvos type 'text' --device <UDID>` |
 | Wait for animation | `sleep 0.4` between commands, or `--pre-delay 0.5` |
 | Toggle/switch | `sim-use tap @N --duration 0.05 --device <UDID>` (UISwitch needs a brief hold) |
 | Swipe | `sim-use swipe --from 50,500 --to 350,500 --device <UDID>` |
@@ -99,6 +101,7 @@ Quick symptom index — see `references/pitfalls.md` for detailed recipes.
 | Android: `paste` denied | Background clipboard access blocked | Use `type` instead |
 | tvOS: `Cannot reach Appium` | Appium is not running at `SIM_USE_APPIUM_URL` | Run `appium --port 4723`; ensure `appium driver list --installed` includes XCUITest |
 | tvOS: `ui` unexpectedly shows Home after Appium starts | A cold WDA launch changed the foreground app and no target was supplied | Re-run the namespaced command with `--bundle-id <id>`, or set `SIM_USE_TVOS_BUNDLE_ID` for top-level `ui` / `screenshot` |
+| tvOS: `type` says it needs focus on a text field | Focus sits on a button/cell, not a text field | Run `ui`, move focus onto the `TextField` with `tvos remote`, retry |
 | tvOS: focus does not move | Direction is unavailable from the current focus graph (`remote` already waits 0.35 s for the focus animation) | Re-run `ui` and choose another direction; for slow transitions raise `--settle-delay` |
 | Outline shows `U+FFFC` in label | iOS icon placeholder character | Match with `--label-regex` excluding the prefix |
 | `[i] … covers ~N% of the screen` warning (text output, or `--json` top-level `advisory` key) | The selector resolved to a near-full-screen wrapper (common on Flutter/canvas UIs) and the tap hit its center, likely missing the intended control | Re-run `ui` and target the control via `@N`/`#<id>`, or pass explicit `-x/-y`/`--point` |
