@@ -82,6 +82,13 @@ e2e-ios:
 e2e-android:
 	./scripts/test-runner-android.sh
 
+# tvOS Simulator E2E (experimental, not part of `make e2e`): builds the CLI
+# + SimUsePlaygroundTV fixture, installs it on a booted tvOS Simulator, and
+# runs TVOSRemoteTests through a local Appium server (`appium --port 4723`,
+# XCUITest driver required).
+e2e-tvos:
+	./scripts/test-runner-tvos.sh
+
 # Agent evals: a headless `claude -p` drives the bundled skill against the
 # Playground apps. Each case makes real API calls, so the wrapper checks the
 # environment and prompts for confirmation before spending anything. Pass
