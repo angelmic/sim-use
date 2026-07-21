@@ -46,6 +46,31 @@ struct TVOSOutlineRendererTests {
         #expect(result.entries.filter { $0.label == "一般" }.count == 2)
     }
 
+    @Test("A focused element with no label/name/value stays in the outline")
+    func unlabeledFocusedElementIsKept() throws {
+        let source = wrapped("""
+        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="true" focused="true" x="100" y="200" width="400" height="300" />
+        """)
+
+        let result = try TVOSOutlineRenderer.render(source: source, includeRaw: false)
+
+        let focused = result.entries.first(where: { $0.states.contains("focused") })
+        #expect(focused != nil)
+        #expect(focused?.role == "Other")
+        #expect(focused?.label == "")
+    }
+
+    @Test("Unlabeled, unfocused elements are still filtered out")
+    func unlabeledUnfocusedElementIsDropped() throws {
+        let source = wrapped("""
+        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="true" focused="false" x="100" y="200" width="400" height="300" />
+        """)
+
+        let result = try TVOSOutlineRenderer.render(source: source, includeRaw: false)
+
+        #expect(result.entries.isEmpty)
+    }
+
     private func wrapped(_ elements: String) -> String {
         """
         <?xml version="1.0" encoding="UTF-8"?>
