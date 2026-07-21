@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import Foundation
 
-/// Resolves the device identifier (iOS Simulator UDID or Android adb
+/// Resolves the device identifier (Apple Simulator UDID or Android adb
 /// serial) a device-scoped command should run against when the user
 /// does not pass `--device` (or its deprecated alias `--udid`)
 /// explicitly. Resolution order:
