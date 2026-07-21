@@ -94,6 +94,29 @@ final class TVOSControllerTests: XCTestCase {
         XCTAssertEqual(requests.map(\.method), ["POST", "GET", "DELETE"])
     }
 
+    func testMalformedSessionIdFailsCleanlyInsteadOfCrashing() async throws {
+        // The session id is interpolated into request paths. One with
+        // URL-illegal characters must be rejected at the source — newer
+        // Foundation URL(string:) percent-encodes instead of returning
+        // nil, so this cannot rely on URL construction failing.
+        let transport = MockTransport(responses: [
+            response(value: SessionValue(sessionId: "bad session id")),
+        ])
+        let controller = makeController(transport: transport)
+
+        do {
+            _ = try await controller.describeUI(udid: tvosUDID, includeRaw: false)
+            XCTFail("Expected an invalid-response error")
+        } catch let error as TVOSAppiumError {
+            guard case .invalidResponse = error else {
+                return XCTFail("Expected .invalidResponse, got \(error)")
+            }
+        }
+
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(requests.map(\.method), ["POST"])
+    }
+
     func testScreenshotDecodesBase64AndClosesSession() async throws {
         let png = Data([0x89, 0x50, 0x4E, 0x47])
         let transport = MockTransport(responses: [
