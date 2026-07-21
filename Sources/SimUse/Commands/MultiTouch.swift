@@ -123,6 +123,8 @@ struct MultiTouch: SimUseExecutableCommand {
         switch PlatformRouter.resolve(udid: device.resolved) {
         case .android:
             return try await executeAndroid()
+        case .tvOSSim:
+            throw TVOSCapabilityError(command: "multi-touch")
         case .iOSSim, .none:
             return try await executeIOSSim()
         }

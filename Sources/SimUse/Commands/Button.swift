@@ -61,6 +61,8 @@ struct Button: SimUseExecutableCommand {
         switch PlatformRouter.resolve(udid: device.resolved) {
         case .android:
             return try executeAndroid()
+        case .tvOSSim:
+            throw TVOSCapabilityError(command: "button")
         case .iOSSim, .none:
             return try await executeIOSSim()
         }

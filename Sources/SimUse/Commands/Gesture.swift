@@ -126,6 +126,8 @@ struct Gesture: SimUseExecutableCommand {
         switch PlatformRouter.resolve(udid: device.resolved) {
         case .android:
             return try await executeAndroid()
+        case .tvOSSim:
+            throw TVOSCapabilityError(command: "gesture")
         case .iOSSim, .none:
             return try await executeIOSSim()
         }

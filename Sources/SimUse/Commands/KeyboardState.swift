@@ -78,6 +78,8 @@ struct KeyboardState: SimUseExecutableCommand {
                 visible: state.visible,
                 imePackage: state.imePackage
             )
+        case .tvOSSim:
+            throw TVOSCapabilityError(command: "keyboard-state")
         case .iOSSim, .none:
             let sub = makeIOSSubcommand()
             return try await sub.execute()

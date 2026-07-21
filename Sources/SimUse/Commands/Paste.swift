@@ -148,6 +148,8 @@ struct Paste: SimUseExecutableCommand {
         switch PlatformRouter.resolve(udid: device.resolved) {
         case .android:
             return try executeAndroid()
+        case .tvOSSim:
+            throw TVOSCapabilityError(command: "paste")
         case .iOSSim, .none:
             return try await executeIOSSim()
         }
