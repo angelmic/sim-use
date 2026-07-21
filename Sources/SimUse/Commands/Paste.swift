@@ -124,7 +124,11 @@ struct Paste: SimUseExecutableCommand {
 
     var simulatorUDIDForDaemon: String? { device.resolved }
 
-    var daemonBypass: Bool { useStdin }
+    // tvOS additionally bypasses so the TVOSCapabilityError rejection
+    // happens in-process, not in a freshly spawned daemon.
+    var daemonBypass: Bool {
+        useStdin || PlatformRouter.resolve(udid: device.resolved) == .tvOSSim
+    }
 
     func format(_ result: ExecutionResult) -> CommandOutput { .empty }
 

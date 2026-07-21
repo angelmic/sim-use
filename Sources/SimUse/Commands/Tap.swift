@@ -96,6 +96,11 @@ struct Tap: SimUseExecutableCommand {
 
     var simulatorUDIDForDaemon: String? { device.resolved }
 
+    /// tvOS never serves this verb (`execute()` throws
+    /// `TVOSCapabilityError`), so reject in-process instead of spawning a
+    /// per-UDID daemon for a device the daemon cannot drive.
+    var daemonBypass: Bool { PlatformRouter.resolve(udid: device.resolved) == .tvOSSim }
+
     typealias ExecutionResult = IOSSimTapCommand.ExecutionResult
 
     /// Same shared group validators as `IOSSimTapCommand.validate()` —

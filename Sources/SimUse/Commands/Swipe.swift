@@ -45,6 +45,11 @@ struct Swipe: SimUseExecutableCommand {
 
     var simulatorUDIDForDaemon: String? { device.resolved }
 
+    /// tvOS never serves this verb (`execute()` throws
+    /// `TVOSCapabilityError`), so reject in-process instead of spawning a
+    /// per-UDID daemon for a device the daemon cannot drive.
+    var daemonBypass: Bool { PlatformRouter.resolve(udid: device.resolved) == .tvOSSim }
+
     /// Mirror `Tap` / `Button`'s "✓ … completed successfully" line.
     /// Without this the cross-platform `sim-use swipe` is silent on
     /// success in non-JSON mode, which is inconsistent with the other
