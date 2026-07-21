@@ -3,8 +3,21 @@ import Foundation
 
 /// Resolves an Apple Simulator UUID to its runtime family. iOS and tvOS
 /// simulator identifiers have the same UUID shape, so string heuristics alone
-/// cannot select the correct backend; the runtime key in `simctl list` is the
+/// cannot select the correct backend; CoreSimulator's own metadata is the
 /// authoritative discriminator.
+///
+/// Two sources, cheapest first:
+///
+/// 1. The device's own `device.plist` in the default CoreSimulator device
+///    set — a single ~1 ms file read, fresh on every call.
+/// 2. `simctl list devices -j` — a full process fork (hundreds of ms), kept
+///    as the fallback for hosts using a custom device set. Forked at most
+///    once per process.
+///
+/// Families this resolver does not support (watchOS, visionOS) resolve to
+/// `nil`, and `PlatformRouter` then applies its historical iOS fallback — so
+/// for routing purposes an unknown Apple UUID behaves exactly as it did
+/// before tvOS support existed.
 public enum SimulatorPlatformResolver {
     public enum ResolverError: Error, LocalizedError {
         case simctlFailed(String)
@@ -22,7 +35,8 @@ public enum SimulatorPlatformResolver {
 
     /// Parse the `simctl list devices -j` envelope into the platform mapping
     /// needed by command routing. Unsupported Apple runtime families are
-    /// intentionally omitted instead of being mislabeled as iOS.
+    /// intentionally omitted rather than guessed; the type comment explains
+    /// what omission means to the router.
     public static func parse(_ data: Data) throws -> [String: Platform] {
         struct RawDevice: Decodable {
             let udid: String
@@ -40,15 +54,7 @@ public enum SimulatorPlatformResolver {
 
         var result: [String: Platform] = [:]
         for (runtimeIdentifier, devices) in envelope.devices {
-            let platform: Platform?
-            if runtimeIdentifier.contains(".tvOS-") {
-                platform = .tvOSSim
-            } else if runtimeIdentifier.contains(".iOS-") {
-                platform = .iOSSim
-            } else {
-                platform = nil
-            }
-            guard let platform else { continue }
+            guard let platform = platform(forRuntimeIdentifier: runtimeIdentifier) else { continue }
             for device in devices {
                 result[device.udid] = platform
             }
@@ -56,15 +62,66 @@ public enum SimulatorPlatformResolver {
         return result
     }
 
-    /// Live lookup used by `PlatformRouter`. The catalog is immutable for the
-    /// lifetime of a short-lived CLI/daemon process, which also avoids a
-    /// `simctl` fork on every routed verb.
-    public static func livePlatform(for udid: String) -> Platform? {
-        liveCatalog[udid]
+    /// Classify a CoreSimulator runtime identifier such as
+    /// `com.apple.CoreSimulator.SimRuntime.tvOS-18-2`.
+    static func platform(forRuntimeIdentifier identifier: String) -> Platform? {
+        if identifier.contains(".tvOS-") { return .tvOSSim }
+        if identifier.contains(".iOS-") { return .iOSSim }
+        return nil
     }
 
+    /// Live lookup used by `PlatformRouter`. Prefers the per-device plist —
+    /// cheap enough for hot verbs like `ui`, and always current, so a
+    /// simulator created after a long-lived daemon spawned still resolves —
+    /// and falls back to the process-cached `simctl` catalog for device sets
+    /// outside the default location.
+    public static func livePlatform(for udid: String) -> Platform? {
+        if let platform = devicePlistPlatform(for: udid) {
+            return platform
+        }
+        return liveCatalog[udid]
+    }
+
+    /// Read the runtime family straight from CoreSimulator's per-device
+    /// `device.plist`. Returns nil when the device directory is missing
+    /// (unknown UUID, or a custom device set), the plist is unreadable, the
+    /// device is marked deleted, or the runtime family is unsupported.
+    static func devicePlistPlatform(
+        for udid: String,
+        deviceSetURL: URL = defaultDeviceSetURL
+    ) -> Platform? {
+        let plistURL = deviceSetURL
+            .appendingPathComponent(udid.uppercased())
+            .appendingPathComponent("device.plist")
+        guard let data = try? Data(contentsOf: plistURL),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
+              let entries = plist as? [String: Any]
+        else { return nil }
+        if entries["isDeleted"] as? Bool == true { return nil }
+        guard let runtime = entries["runtime"] as? String else { return nil }
+        return platform(forRuntimeIdentifier: runtime)
+    }
+
+    /// CoreSimulator's default device set. Devices in a custom set
+    /// (`simctl --set`) are not visible here; they are served by the simctl
+    /// fallback instead.
+    static let defaultDeviceSetURL = FileManager.default
+        .homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Developer/CoreSimulator/Devices")
+
     private static let liveCatalog: [String: Platform] = {
-        (try? parse(runSimctl())) ?? [:]
+        do {
+            return try parse(runSimctl())
+        } catch {
+            // Swallowing this silently would route a tvOS Simulator to the
+            // iOS backend (the router's fallback) with nothing to explain
+            // why. The command still proceeds, so a warning is the right
+            // volume.
+            FileHandle.standardError.write(Data(
+                "warning: could not resolve Apple Simulator runtime families (\(error.localizedDescription)); treating unrecognised simulator UUIDs as iOS.\n".utf8
+            ))
+            return [:]
+        }
     }()
 
     private static func runSimctl() throws -> Data {

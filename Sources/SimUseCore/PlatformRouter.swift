@@ -35,6 +35,10 @@ public enum PlatformRouter {
         if trimmed.isEmpty { return nil }
         if looksLikeAndroid(trimmed) { return .android }
         if looksLikeIOSSim(trimmed) {
+            // A lookup miss (unknown UUID, unsupported runtime family such
+            // as watchOS, or a custom device set with simctl unavailable)
+            // keeps the historical iOS fallback: the iOS backend owns the
+            // clearer "not booted / not found" error surface.
             return simulatorPlatformLookup(trimmed) ?? .iOSSim
         }
         return nil
