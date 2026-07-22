@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `sim-use devices` classifies `simctl` tvOS runtimes separately and accepts `--platform tvos`; `--platform ios` no longer includes tvOS rows.
 - `app-state` reports `"platform": "tvos"` for tvOS Simulators (previously `"ios"`); the underlying process probe is unchanged.
+- `tvos remote` keyboard-mapped buttons (directions, select, menu) press through the simulator HID channel by default — ~0.3 s instead of ~2.5 s per Appium session — and report no focus transition; pass `--report-focus` for the observing Appium path with the before/after pair. play-pause and home have no keyboard binding and always use Appium.
+- `tvos screenshot` without `--bundle-id` captures via `simctl io` (~0.7 s, no Appium); with `--bundle-id` it keeps the Appium path that restores the target app to the foreground first.
 - `tvos remote` waits 0.35 s after the press before sampling the after-focus, so the reported transition reflects where focus actually landed; tune or disable with `--settle-delay`.
 
 ### Fixed

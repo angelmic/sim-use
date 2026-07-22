@@ -3,10 +3,15 @@ import ArgumentParser
 import Foundation
 import SimUseCore
 
-/// Captures the foreground tvOS Simulator through Appium's WebDriver
-/// screenshot endpoint. The command bypasses the sim-use daemon because the
-/// Appium session already provides the transport and is deliberately scoped
-/// to this one operation.
+/// Captures the tvOS Simulator display. Two paths:
+///
+///   * no --bundle-id: `simctl io screenshot` — ~0.7 s, no Appium
+///     involved, captures whatever is on screen right now
+///   * --bundle-id: the Appium WebDriver endpoint, whose session restores
+///     the target app to the foreground first (the cold-WDA recovery)
+///
+/// Bypasses the sim-use daemon either way: one path has its own transport,
+/// the other is a single simctl invocation.
 public struct TVOSScreenshotCommand: SimUseExecutableCommand {
     public struct ExecutionResult: Codable, Equatable, Sendable {
         public let path: String
@@ -40,14 +45,40 @@ public struct TVOSScreenshotCommand: SimUseExecutableCommand {
     }
 
     public func execute() async throws -> ExecutionResult {
-        let controller = try TVOSController.live()
-        let png = try await controller.screenshot(
-            udid: device.resolved,
-            bundleId: target.bundleId
-        )
         let outputURL = try Self.prepareOutputURL(output: output, deviceID: device.resolved)
-        try png.write(to: outputURL)
+        if let bundleId = target.bundleId {
+            // Appium path: the session brings the requested app to the
+            // foreground before capturing.
+            let controller = try TVOSController.live()
+            let png = try await controller.screenshot(
+                udid: device.resolved,
+                bundleId: bundleId
+            )
+            try png.write(to: outputURL)
+        } else {
+            try await Self.captureViaSimctl(device.resolved, outputURL)
+        }
         return ExecutionResult(path: outputURL.path)
+    }
+
+    /// `xcrun simctl io <udid> screenshot <path>` — replaceable in unit
+    /// tests, which must not require a booted simulator.
+    nonisolated(unsafe) static var captureViaSimctl: (String, URL) async throws -> Void = { udid, url in
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = ["simctl", "io", udid, "screenshot", url.path]
+        let stderr = Pipe()
+        process.standardOutput = Pipe()
+        process.standardError = stderr
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let message = String(
+                data: stderr.fileHandleForReading.readDataToEndOfFile(),
+                encoding: .utf8
+            )?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw CLIError(errorDescription: "simctl screenshot failed (exit \(process.terminationStatus)): \(message)")
+        }
     }
 
     public func format(_ result: ExecutionResult) -> CommandOutput {

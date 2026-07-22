@@ -117,6 +117,83 @@ final class TVOSControllerTests: XCTestCase {
         XCTAssertEqual(requests.map(\.method), ["POST"])
     }
 
+    func testRemoteButtonHIDKeycodeBindings() {
+        XCTAssertEqual(TVOSRemoteButton.up.hidKeycode, 82)
+        XCTAssertEqual(TVOSRemoteButton.down.hidKeycode, 81)
+        XCTAssertEqual(TVOSRemoteButton.left.hidKeycode, 80)
+        XCTAssertEqual(TVOSRemoteButton.right.hidKeycode, 79)
+        XCTAssertEqual(TVOSRemoteButton.select.hidKeycode, 40)
+        XCTAssertEqual(TVOSRemoteButton.menu.hidKeycode, 41)
+        XCTAssertNil(TVOSRemoteButton.playPause.hidKeycode)
+        XCTAssertNil(TVOSRemoteButton.home.hidKeycode)
+    }
+
+    func testRemotePressUsesHIDFastPathWhenWired() async throws {
+        let recorder = KeyRecorder()
+        TVOSHIDBridge.pressKey = { keycode, udid in
+            await recorder.record(keycode, udid: udid)
+        }
+        defer { TVOSHIDBridge.pressKey = nil }
+        let transport = MockTransport(responses: [])
+        let controller = makeController(transport: transport)
+
+        let result = try await controller.pressRemote(.right, udid: tvosUDID, settleDelay: 0)
+
+        XCTAssertNil(result.before)
+        XCTAssertNil(result.after)
+        let presses = await recorder.presses
+        XCTAssertEqual(presses.map(\.keycode), [79])
+        XCTAssertEqual(presses.first?.udid, tvosUDID)
+        let requests = await transport.recordedRequests()
+        XCTAssertTrue(requests.isEmpty, "the HID fast path must not open an Appium session")
+    }
+
+    func testRemotePressWithoutKeyboardBindingStaysOnAppium() async throws {
+        let recorder = KeyRecorder()
+        TVOSHIDBridge.pressKey = { keycode, udid in
+            await recorder.record(keycode, udid: udid)
+        }
+        defer { TVOSHIDBridge.pressKey = nil }
+        let transport = MockTransport(responses: [
+            response(value: SessionValue(sessionId: "session-9")),
+            response(value: settingsSource(focusedLabel: "一般")),
+            response(value: Optional<String>.none),
+            response(value: settingsSource(focusedLabel: "一般")),
+            response(value: Optional<String>.none),
+        ])
+        let controller = makeController(transport: transport)
+
+        _ = try await controller.pressRemote(.playPause, udid: tvosUDID, settleDelay: 0)
+
+        let presses = await recorder.presses
+        XCTAssertTrue(presses.isEmpty, "play-pause has no keyboard binding and must use Appium")
+        let requests = await transport.recordedRequests()
+        XCTAssertFalse(requests.isEmpty)
+    }
+
+    func testRemotePressReportFocusForcesAppiumPath() async throws {
+        let recorder = KeyRecorder()
+        TVOSHIDBridge.pressKey = { keycode, udid in
+            await recorder.record(keycode, udid: udid)
+        }
+        defer { TVOSHIDBridge.pressKey = nil }
+        let transport = MockTransport(responses: [
+            response(value: SessionValue(sessionId: "session-10")),
+            response(value: settingsSource(focusedLabel: "一般")),
+            response(value: Optional<String>.none),
+            response(value: settingsSource(focusedLabel: "使用者和帳號")),
+            response(value: Optional<String>.none),
+        ])
+        let controller = makeController(transport: transport)
+
+        let result = try await controller.pressRemote(.right, udid: tvosUDID, settleDelay: 0, reportFocus: true)
+
+        let presses = await recorder.presses
+        XCTAssertTrue(presses.isEmpty, "--report-focus must take the observing Appium path")
+        XCTAssertEqual(result.before?.label, "一般")
+        XCTAssertEqual(result.after?.label, "使用者和帳號")
+    }
+
     func testScreenshotDecodesBase64AndClosesSession() async throws {
         let png = Data([0x89, 0x50, 0x4E, 0x47])
         let transport = MockTransport(responses: [
@@ -244,6 +321,14 @@ final class TVOSControllerTests: XCTestCase {
             baseURL: URL(string: "http://127.0.0.1:4723")!,
             transport: transport
         ))
+    }
+}
+
+private actor KeyRecorder {
+    private(set) var presses: [(keycode: UInt32, udid: String)] = []
+
+    func record(_ keycode: UInt32, udid: String) {
+        presses.append((keycode, udid))
     }
 }
 

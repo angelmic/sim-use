@@ -25,7 +25,7 @@ sim-use tvos remote menu --device <TV_UDID> --bundle-id <id>        # back
 sim-use tvos type 'query' --device <TV_UDID> --bundle-id <id>       # into focused text field
 ```
 
-Buttons: `up`, `down`, `left`, `right`, `select`, `menu`, `play-pause`, `home`. tvOS navigation is focus-driven; `tap`, `swipe`, `touch`, typing, and other coordinate actions intentionally fail with a tvOS-specific hint. `remote` waits 0.35 s for the focus animation before reporting the before → after transition; tune or disable with `--settle-delay`.
+Buttons: `up`, `down`, `left`, `right`, `select`, `menu`, `play-pause`, `home`. Directions/select/menu press through a ~0.3 s HID fast path and report nothing — verify with `ui` after, or pass `--report-focus` to get the before/after focus pair (one Appium session, ~2.5 s).  tvOS navigation is focus-driven; `tap`, `swipe`, `touch`, typing, and other coordinate actions intentionally fail with a tvOS-specific hint. `remote` waits 0.35 s for the focus animation before reporting the before → after transition; tune or disable with `--settle-delay`.
 
 `type` enters a whole string into the focused text field (select opens the keyboard, the string lands over the WebDriver element surface, menu commits). It needs focus on a `TextField` first.
 

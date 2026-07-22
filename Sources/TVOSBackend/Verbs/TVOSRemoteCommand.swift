@@ -24,6 +24,12 @@ public struct TVOSRemoteCommand: SimUseExecutableCommand {
     )
     public var settleDelay: Double = 0.35
 
+    @Flag(
+        name: .customLong("report-focus"),
+        help: "Observe and report the before/after focused element (one Appium session). Without it, keyboard-mapped buttons press through the ~0.3 s HID fast path and report nothing — re-run `ui` to observe."
+    )
+    public var reportFocus: Bool = false
+
     public var jsonOutput: Bool { json.enabled }
     public var daemonBypass: Bool { true }
     public var simulatorUDIDForDaemon: String? { device.resolved }
@@ -46,12 +52,18 @@ public struct TVOSRemoteCommand: SimUseExecutableCommand {
             button,
             udid: device.resolved,
             bundleId: target.bundleId,
-            settleDelay: settleDelay
+            settleDelay: settleDelay,
+            reportFocus: reportFocus
         )
     }
 
     public func format(_ result: TVOSRemoteResult) -> CommandOutput {
-        .line("Pressed \(result.button.rawValue): \(focusDescription(result.before)) -> \(focusDescription(result.after))")
+        // The HID fast path presses without observing; don't render a
+        // misleading "no focused element -> no focused element".
+        guard result.before != nil || result.after != nil else {
+            return .line("Pressed \(result.button.rawValue)")
+        }
+        return .line("Pressed \(result.button.rawValue): \(focusDescription(result.before)) -> \(focusDescription(result.after))")
     }
 
     private func focusDescription(_ entry: Outline.Entry?) -> String {

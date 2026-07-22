@@ -45,6 +45,17 @@ enum EntryPoint {
         // no-op locally.
         BridgeClient.expectedBridgeVersion = ReleaseVersion.normalize(VERSION)
 
+        // Wire the tvOS backend's HID fast path. TVOSBackend doesn't link
+        // the FB frameworks; the executable does, so the hook goes in here
+        // (same pattern as the daemon's livenessProbe).
+        TVOSHIDBridge.pressKey = { keycode, udid in
+            try await HIDInteractor.performHIDEvent(
+                .shortKeyPress(keycode),
+                for: udid,
+                logger: SimUse.simUseLogger
+            )
+        }
+
         if let typed = CommandLine.arguments.dropFirst().first,
            let canonical = iOSOnlyVerbRedirects[typed] {
             FileHandle.standardError.write(Data("""

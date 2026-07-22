@@ -18,6 +18,22 @@ public enum TVOSRemoteButton: String, Codable, CaseIterable, Sendable {
         default: return rawValue
         }
     }
+
+    /// HID keyboard usage the tvOS Simulator maps onto this remote button
+    /// (arrows move focus, Return selects, Escape is Menu — the same
+    /// bindings Simulator.app uses for a hardware keyboard). nil = no
+    /// keyboard equivalent; those buttons only exist on the Appium path.
+    var hidKeycode: UInt32? {
+        switch self {
+        case .up: return 82
+        case .down: return 81
+        case .left: return 80
+        case .right: return 79
+        case .select: return 40
+        case .menu: return 41
+        case .playPause, .home: return nil
+        }
+    }
 }
 
 public struct TVOSRemoteResult: Codable, Equatable, Sendable {
@@ -61,9 +77,24 @@ public struct TVOSController: Sendable {
         _ button: TVOSRemoteButton,
         udid: String,
         bundleId: String? = nil,
-        settleDelay: TimeInterval = 0.35
+        settleDelay: TimeInterval = 0.35,
+        reportFocus: Bool = false
     ) async throws -> TVOSRemoteResult {
-        try await client.withSession(udid: udid, bundleId: bundleId) { session in
+        // HID fast path (~0.3 s vs ~2.5 s for an Appium session): no
+        // session, no focus report. Buttons without a keyboard binding
+        // (play-pause, home) and --report-focus take the Appium path,
+        // which observes the before/after focus for free.
+        if !reportFocus,
+           let keycode = button.hidKeycode,
+           let pressKey = TVOSHIDBridge.pressKey {
+            try await pressKey(keycode, udid)
+            if settleDelay > 0 {
+                try await Task.sleep(nanoseconds: UInt64(settleDelay * 1_000_000_000))
+            }
+            return TVOSRemoteResult(button: button, before: nil, after: nil)
+        }
+
+        return try await client.withSession(udid: udid, bundleId: bundleId) { session in
             let beforeSource = try await session.source()
             let before = try TVOSOutlineRenderer
                 .render(source: beforeSource, includeRaw: false)
