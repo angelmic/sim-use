@@ -85,6 +85,19 @@ struct TVOSCommandParsingTests {
         #expect(overridden?.settleDelay == 0)
     }
 
+    @Test("remote parses --report-focus and defaults it off")
+    func reportFocusFlagParses() throws {
+        let fast = try TVOSCommand.parseAsRoot([
+            "remote", "down", "--device", tvosUDID,
+        ]) as? TVOSRemoteCommand
+        #expect(fast?.reportFocus == false)
+
+        let observing = try TVOSCommand.parseAsRoot([
+            "remote", "down", "--device", tvosUDID, "--report-focus",
+        ]) as? TVOSRemoteCommand
+        #expect(observing?.reportFocus == true)
+    }
+
     @Test("remote rejects a negative settle delay")
     func negativeSettleDelayRejected() {
         #expect(throws: (any Error).self) {
