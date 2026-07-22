@@ -56,6 +56,39 @@ struct TVOSRemoteTests {
         #expect(down.after == "Echo", "below Bravo is Echo, got \(down.after ?? "nil")")
     }
 
+    @Test("The default remote press takes the HID fast path and still moves focus")
+    func hidFastPathPressesWithoutObserving() async throws {
+        // Arrange
+        let udid = try #require(tvosSimulatorUDID)
+        try await launchFixture(screen: "grid")
+
+        // Act — no --report-focus: the press goes through the HID channel
+        // (~0.3 s, no Appium session) and reports nothing.
+        let press = try await runTVOSCommand("tvos remote right --device \(udid)")
+
+        // Assert — output has no transition, but the focus really moved.
+        #expect(press.output.contains("Pressed right"))
+        #expect(!press.output.contains("->"), "the fast path must not fabricate a focus report: \(press.output)")
+        let after = try await runTVOSCommand("tvos ui --device \(udid) --bundle-id \(bundleID)")
+        #expect(after.output.contains("\"Bravo\"") && after.output.contains("focused"), "right of Alpha is Bravo")
+    }
+
+    @Test("Screenshot without a bundle id captures through simctl")
+    func screenshotFastPathViaSimctl() async throws {
+        // Arrange
+        let udid = try #require(tvosSimulatorUDID)
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tvos-e2e-simctl-\(UUID().uuidString).png").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        // Act — no --bundle-id: the capture path is simctl io, no Appium.
+        _ = try await runTVOSCommand("tvos screenshot --device \(udid) --output \(path)")
+
+        // Assert
+        let data = try #require(FileManager.default.contents(atPath: path))
+        #expect(data.starts(with: [0x89, 0x50, 0x4E, 0x47]), "output should be a PNG")
+    }
+
     @Test("Focus stops at screen edges instead of wrapping")
     func focusStopsAtEdges() async throws {
         // Arrange — Alpha sits on the grid's top-left edge.
@@ -352,11 +385,13 @@ struct TVOSRemoteTests {
     }
 
     /// Press one remote button and return the reported focus transition,
-    /// parsed from the --json envelope.
+    /// parsed from the --json envelope. Uses --report-focus (the observing
+    /// Appium path): the suite's geometry-contract assertions need the
+    /// before/after pair. The default HID fast path has its own test.
     private func remote(_ button: String) async throws -> (before: String?, after: String?) {
         let udid = try #require(tvosSimulatorUDID)
         let result = try await runTVOSCommand(
-            "tvos remote \(button) --device \(udid) --bundle-id \(bundleID) --json"
+            "tvos remote \(button) --report-focus --device \(udid) --bundle-id \(bundleID) --json"
         )
         let json = try #require(
             try JSONSerialization.jsonObject(with: Data(result.output.utf8)) as? [String: Any],

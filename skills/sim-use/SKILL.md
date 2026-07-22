@@ -48,7 +48,7 @@ On iOS or Android, pick a selector in order of preference:
 
 Disambiguate collisions with `--element-type` or `--frame minY=0.7r` (see `references/cheatsheet.md`).
 
-On tvOS, do not use coordinate or selector taps. Read the entry carrying the `focused` state, then move or activate focus with the Siri Remote surface:
+On tvOS, do not use coordinate or selector taps. Read the entry carrying the `focused` state, then move or activate focus with the Siri Remote surface. Presses are fast (~0.3 s) and report nothing — always re-run `ui` afterwards to observe, or add `--report-focus` for the before/after focused element in one slower call:
 
 ```bash
 sim-use tvos remote down --device <UDID> --bundle-id <id>
