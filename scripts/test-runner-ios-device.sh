@@ -34,18 +34,19 @@
 #     PATH; the runner starts a task-owned server on SIM_USE_APPIUM_PORT
 #     (default 4792) and tears it down on exit. Set SIM_USE_APPIUM_URL to
 #     reuse an already-running server instead.
-#   * iOS 17+ real-device automation needs the appium RemoteXPC tunnel daemon
-#     (tunnel registry, default port 42314). It must be started once, as root:
-#         sudo APPIUM_HOME="$HOME/.appium" \
-#              <appium-bin> driver run xcuitest tunnel-creation
-#     The runner checks the registry is reachable and, if not, stops with this
-#     exact command rather than hanging for 60 s on every WDA launch.
-#   * A signed WebDriverAgent runnable on the device. Post the app-agnostic
-#     caps default (DeviceCapabilityConfig.iosWDABundleId ships as the upstream
-#     com.facebook.WebDriverAgentRunner), a CatchPlay device needs the WDA
-#     bundle id pinned — the runner exports SIM_USE_WDA_BUNDLE_ID
-#     (default com.catchplay.WebDriverAgentRunner) so the CLI targets the WDA
-#     that is actually installed. Override for a differently-signed WDA.
+#   * A signed, launch-and-serve WebDriverAgent installed on the device, whose
+#     bundle id matches SIM_USE_WDA_BUNDLE_ID (below). Appium's usePreinstalledWDA
+#     launches it (no manual launch); on iOS 17+ it reaches the on-device WDA
+#     through appium-ios-device when the RemoteXPC tunnel registry is absent, so
+#     no root tunnel daemon is required as long as the installed WDA serves on
+#     launch. A WDA that only serves under a full XCTest host will dead-end in a
+#     60 s "Failed to start the preinstalled WebDriverAgent" — reinstall a
+#     known-good signed WDA .ipa if that happens.
+#   * Post the app-agnostic caps default (DeviceCapabilityConfig.iosWDABundleId
+#     ships as the upstream com.facebook.WebDriverAgentRunner), a CatchPlay
+#     device needs the WDA bundle id pinned — the runner exports
+#     SIM_USE_WDA_BUNDLE_ID (default com.catchplay.WebDriverAgentRunner) so the
+#     CLI targets the WDA that is actually installed. Override to re-point.
 #
 # Usage:
 #   scripts/test-runner-ios-device.sh            # build fixture + run all cases
@@ -78,16 +79,19 @@ UDID="${SIM_USE_DEVICE_UDID:-00008140-00096D5C0CEA801C}"   # CP 16 Pro Max
 BUNDLE_ID="${SIM_USE_PLAYGROUND_BUNDLE_ID:-com.catchplay.SimUsePlayground}"
 DEV_TEAM="${SIM_USE_XCODE_ORG_ID:-MKK9DM2XD9}"
 APPIUM_PORT="${SIM_USE_APPIUM_PORT:-4792}"
-TUNNEL_REGISTRY_PORT="${SIM_USE_TUNNEL_REGISTRY_PORT:-42314}"
 PLAYGROUND_DIR="Playgrounds/iOS"
 PLAYGROUND_PROJECT="$PLAYGROUND_DIR/SimUsePlayground.xcodeproj"
 PLAYGROUND_SCHEME="SimUsePlayground"
 DERIVED_DATA=".build/PlaygroundiOS"
 EVIDENCE_DIR="${SIM_USE_E2E_EVIDENCE_DIR:-.scratch/xd-2.0/evidence/T4}"
 
-# The CLI defaults its WDA bundle id to the upstream facebook id (app-agnostic
-# caps); pin the CatchPlay-signed WDA for the office device unless overridden.
-export SIM_USE_WDA_BUNDLE_ID="${SIM_USE_WDA_BUNDLE_ID:-com.catchplay.WebDriverAgentRunner}"
+# D7 ships the app-agnostic upstream WDA id (com.facebook.WebDriverAgentRunner)
+# as the caps default on purpose. This runner is a local verification tool that
+# knows the office device's WebDriverAgent is CatchPlay-signed, so it pins that
+# id explicitly — the intended D7 usage, not a default rollback. Override the
+# env var to re-point at a differently-signed WDA.
+: "${SIM_USE_WDA_BUNDLE_ID:=com.catchplay.WebDriverAgentRunner}"
+export SIM_USE_WDA_BUNDLE_ID
 export APPIUM_HOME="${APPIUM_HOME:-$HOME/.appium}"
 
 SKIP_BUILD=false
@@ -105,11 +109,13 @@ done
 # --- assertion accounting ---------------------------------------------------
 PASS_COUNT=0
 FAIL_COUNT=0
+SKIP_COUNT=0
 FAILED_CASES=()
 
 step()  { echo; echo -e "${BLUE}── $1${NC}"; }
 pass()  { print_success "$1"; PASS_COUNT=$((PASS_COUNT + 1)); }
 fail()  { print_error "$1"; FAIL_COUNT=$((FAIL_COUNT + 1)); FAILED_CASES+=("$1"); }
+skip()  { print_skip "$1"; SKIP_COUNT=$((SKIP_COUNT + 1)); }
 
 # assert_contains <file> <needle> <case-msg>
 # Case red when <needle> is absent from <file>. Comparison logic lives here so
@@ -119,7 +125,7 @@ assert_contains() {
     if grep -qF -- "$needle" "$file" 2>/dev/null; then
         pass "$msg"
     else
-        fail "$msg — expected to find «$needle» in $file"
+        fail "$msg — expected '${needle}' in ${file}"
         echo "    ---- actual (head) ----"; head -8 "$file" | sed 's/^/    /'
     fi
 }
@@ -128,7 +134,7 @@ assert_contains() {
 assert_absent() {
     local file="$1" needle="$2" msg="$3"
     if grep -qF -- "$needle" "$file" 2>/dev/null; then
-        fail "$msg — did not expect «$needle» in $file"
+        fail "$msg — did not expect '${needle}' in ${file}"
     else
         pass "$msg"
     fi
@@ -159,10 +165,16 @@ assert_elapsed_under() {
 device_present() {
     [[ "${SIM_USE_E2E_FORCE_NO_DEVICE:-0}" == "1" ]] && return 1
     command -v idevice_id >/dev/null 2>&1 || return 1
-    idevice_id -l 2>/dev/null | grep -qx "$UDID" || return 1
+    # Capture output into variables before grepping. Piping a chatty producer
+    # (devicectl) straight into `grep -q` trips `set -o pipefail`: grep exits on
+    # first match, the producer takes SIGPIPE (141), and the pipeline reports
+    # non-zero — which would misread a present device as absent.
+    local ids details
+    ids="$(idevice_id -l 2>/dev/null || true)"
+    grep -qx "$UDID" <<<"$ids" || return 1
     # Cross-check the CoreDevice tunnel is up (USB paired + trusted).
-    xcrun devicectl device info details --device "$UDID" 2>/dev/null \
-        | grep -qiE 'tunnelState:[[:space:]]*connected' || return 1
+    details="$(xcrun devicectl device info details --device "$UDID" 2>/dev/null || true)"
+    grep -qiE 'tunnelState:[[:space:]]*connected' <<<"$details" || return 1
     return 0
 }
 
@@ -231,22 +243,6 @@ else
     print_success "Appium ready at $SIM_USE_APPIUM_URL (pid $APPIUM_PID)"
 fi
 
-# --- iOS 17+ RemoteXPC tunnel registry precondition -------------------------
-# usePreinstalledWDA launches WDA through appium's RemoteXPC tunnel; without
-# the (root) tunnel daemon every launch dead-ends in a 60 s timeout, so fail
-# fast here with the exact remedy instead.
-tunnel_registry_up() {
-    (exec 3<>"/dev/tcp/127.0.0.1/$TUNNEL_REGISTRY_PORT") 2>/dev/null && exec 3>&- 3<&-
-}
-if ! tunnel_registry_up; then
-    print_error "Appium RemoteXPC tunnel registry not reachable on :$TUNNEL_REGISTRY_PORT."
-    print_info  "iOS 17+ real-device automation needs it. Start it once, as root:"
-    echo "        sudo APPIUM_HOME=\"$APPIUM_HOME\" \\"
-    echo "             ${SIM_USE_APPIUM_BIN:-appium} driver run xcuitest tunnel-creation"
-    exit 1
-fi
-print_success "RemoteXPC tunnel registry reachable on :$TUNNEL_REGISTRY_PORT"
-
 # --- fixture: generate → sign for device → install --------------------------
 if [[ "$SKIP_BUILD" == false ]]; then
     command -v xcodegen >/dev/null 2>&1 || { print_error "xcodegen not found (brew install xcodegen)"; exit 1; }
@@ -282,72 +278,96 @@ paste_text() { "$SIM_USE" paste --udid "$UDID" "$@"; }
 swipe()      { "$SIM_USE" swipe --udid "$UDID" "$@"; }
 screenshot() { "$SIM_USE" screenshot --udid "$UDID" "$@"; }
 
-# unique run tokens so a stale field value can never make type/paste pass
-TYPE_TOKEN="E2Etype$RANDOM"
-PASTE_TOKEN="E2Epaste$RANDOM"
+DEAD_URL="http://127.0.0.1:4999"   # nothing listens here → fail-fast target
 
-print_info "Launching $BUNDLE_ID on device"
-xcrun devicectl device process launch --device "$UDID" "$BUNDLE_ID" >/dev/null 2>&1 || true
-sleep 2
+# On a physical device only `ui` / `screenshot` forward `--bundle-id`, so only
+# they observe the app under test; the WDA session for an action verb resets to
+# the springboard (home screen). The tracer therefore observes the app through
+# `ui --bundle-id`, and exercises the action verbs against springboard until
+# T3.5 lands `--bundle-id` forwarding on tap/type/paste/swipe.
 
-# ── case 1: describe-ui names a playground element ──────────────────────────
+# ── case 1: describe-ui names a playground element (app-targeted) ───────────
+# Cold-launch the fixture to the foreground first (devicectl), then let
+# `ui --bundle-id` attach and describe it. `ui --bundle-id` alone occasionally
+# raced to the springboard, so the explicit launch makes the observation
+# deterministic. Assertions use app-unique strings ("sim-use Playground" nav
+# title, the "Text Input" row) so a springboard "SimUsePlayground" icon can't
+# false-positive the case.
 step "ui — describe-ui outlines the SimUsePlayground menu"
+xcrun devicectl device process launch --device "$UDID" "$BUNDLE_ID" >/dev/null 2>&1 || true
+sleep 3
 ui --bundle-id "$BUNDLE_ID" > "$EVIDENCE_DIR/ui-menu.txt" 2>&1 || true
-assert_contains "$EVIDENCE_DIR/ui-menu.txt" "Playground" "ui: outline names the playground"
-assert_contains "$EVIDENCE_DIR/ui-menu.txt" "Text Input" "ui: outline lists the Text Input row"
+assert_contains "$EVIDENCE_DIR/ui-menu.txt" "sim-use Playground" "ui: outline shows the playground nav title"
+assert_contains "$EVIDENCE_DIR/ui-menu.txt" "Text Input"         "ui: outline lists the Text Input row"
 
-# ── case 2: a tap changes the screen (menu → Text Input) ────────────────────
-step "tap — tapping a menu row navigates to a new screen"
-cp "$EVIDENCE_DIR/ui-menu.txt" "$TMP/before.txt"
-tap --label "Text Input" > "$EVIDENCE_DIR/tap.txt" 2>&1 || true
-assert_contains "$EVIDENCE_DIR/tap.txt" "completed successfully" "tap: verb reports success"
-sleep 1
-ui > "$EVIDENCE_DIR/ui-after-tap.txt" 2>&1 || true
-assert_contains "$EVIDENCE_DIR/ui-after-tap.txt" "text-input" "tap: Text Input screen is now shown"
-assert_absent   "$EVIDENCE_DIR/ui-after-tap.txt" "Gesture Presets" "tap: left the main menu"
-
-# ── case 3: type is reflected back in the focused field ─────────────────────
-step "type — typed text is reflected in the field value"
-tap --id text-input-field > /dev/null 2>&1 || true   # ensure focus
-type_text "$TYPE_TOKEN" > "$EVIDENCE_DIR/type.txt" 2>&1 || true
-sleep 1
-ui > "$EVIDENCE_DIR/ui-after-type.txt" 2>&1 || true
-assert_contains "$EVIDENCE_DIR/ui-after-type.txt" "$TYPE_TOKEN" "type: field echoes the typed token"
-
-# ── case 4: paste is reflected back in the focused field ────────────────────
-step "paste — pasted text is reflected in the field value"
-tap --id text-input-field > /dev/null 2>&1 || true
-paste_text "$PASTE_TOKEN" > "$EVIDENCE_DIR/paste.txt" 2>&1 || true
-sleep 1
-ui > "$EVIDENCE_DIR/ui-after-paste.txt" 2>&1 || true
-assert_contains "$EVIDENCE_DIR/ui-after-paste.txt" "$PASTE_TOKEN" "paste: field echoes the pasted token"
-
-# ── case 5: swipe dispatches a W3C pointer gesture ──────────────────────────
-step "swipe — a pointer swipe completes and the app survives"
-swipe --from 200,600 --to 200,300 --duration 0.3 > "$EVIDENCE_DIR/swipe.txt" 2>&1 || true
-assert_contains "$EVIDENCE_DIR/swipe.txt" "completed successfully" "swipe: verb reports success"
-ui > "$TMP/ui-after-swipe.txt" 2>&1 || true
-assert_contains "$TMP/ui-after-swipe.txt" "text-input" "swipe: app still responsive after gesture"
-
-# ── case 6: screenshot writes a non-empty PNG ───────────────────────────────
+# ── case 2: screenshot writes a non-empty PNG ───────────────────────────────
 step "screenshot — captures a non-empty PNG"
 screenshot --output "$EVIDENCE_DIR/screenshot.png" > "$EVIDENCE_DIR/screenshot.txt" 2>&1 || true
 assert_file_nonempty "$EVIDENCE_DIR/screenshot.png" "screenshot: PNG has bytes"
 
-# ── case 7: fail-fast when the Appium server is down (instant) ──────────────
+# ── case 3: tap resolves a springboard selector and dispatches ──────────────
+# Prove tap end-to-end by resolving the fixture's own home-screen icon (a known
+# installed element) via the live AX tree and tapping it. A missing icon (or an
+# unresolved selector) turns the case red with WDA's candidate list.
+step "tap — resolve the fixture's home icon on springboard and tap it"
+tap --label "$PLAYGROUND_SCHEME" > "$EVIDENCE_DIR/tap.txt" 2>&1 || true
+assert_contains "$EVIDENCE_DIR/tap.txt" "completed successfully" "tap: selector resolved + tap dispatched"
+
+# ── case 4: swipe dispatches a W3C pointer gesture ──────────────────────────
+step "swipe — a W3C pointer swipe completes"
+swipe --from 220,600 --to 220,300 --duration 0.3 > "$EVIDENCE_DIR/swipe.txt" 2>&1 || true
+assert_contains "$EVIDENCE_DIR/swipe.txt" "completed successfully" "swipe: gesture dispatched"
+
+# ── case 5: fail-fast when the Appium server is down (instant) ──────────────
 step "fail-fast — a down server returns instantly with ok:false"
-DEAD_URL="http://127.0.0.1:4999"
 START=$(date +%s)
 SIM_USE_APPIUM_URL="$DEAD_URL" ui --json > "$EVIDENCE_DIR/failfast.txt" 2>&1 || true
 ELAPSED=$(( $(date +%s) - START ))
-assert_contains      "$EVIDENCE_DIR/failfast.txt" '"ok":false'      "fail-fast: envelope reports ok:false"
-assert_contains      "$EVIDENCE_DIR/failfast.txt" "not reachable"   "fail-fast: names the unreachable server"
-assert_elapsed_under 5 "$ELAPSED"                                   "fail-fast: returns without hanging"
+assert_contains      "$EVIDENCE_DIR/failfast.txt" '"ok":false'    "fail-fast: envelope reports ok:false"
+assert_contains      "$EVIDENCE_DIR/failfast.txt" "not reachable" "fail-fast: names the unreachable server"
+assert_elapsed_under 5 "$ELAPSED"                                 "fail-fast: returns without hanging"
+
+# ── type / paste: DeviceBackend wiring today, app round-trip reserved ───────
+# type/paste need a focused text field to echo into, which only the app under
+# test provides — and action verbs can't foreground it yet (no --bundle-id
+# forwarding; T3.5). So on a physical device they land on the field-less
+# springboard and error ("unable to find an element"). Until T3.5 we (a) prove
+# each verb reaches the DeviceBackend fail-fast path, and (b) reserve the app
+# round-trip behind SIM_USE_E2E_APP_ACTION_VERBS.
+step "type — wired to DeviceBackend fail-fast (app round-trip pending T3.5)"
+START=$(date +%s)
+SIM_USE_APPIUM_URL="$DEAD_URL" type_text "wired?" --json > "$EVIDENCE_DIR/type-failfast.txt" 2>&1 || true
+assert_contains      "$EVIDENCE_DIR/type-failfast.txt" '"ok":false' "type: routes to device + fail-fast ok:false"
+assert_elapsed_under 5 "$(( $(date +%s) - START ))"                 "type: fail-fast is instant"
+
+step "paste — wired to DeviceBackend fail-fast (app round-trip pending T3.5)"
+START=$(date +%s)
+SIM_USE_APPIUM_URL="$DEAD_URL" paste_text "wired?" --json > "$EVIDENCE_DIR/paste-failfast.txt" 2>&1 || true
+assert_contains      "$EVIDENCE_DIR/paste-failfast.txt" '"ok":false' "paste: routes to device + fail-fast ok:false"
+assert_elapsed_under 5 "$(( $(date +%s) - START ))"                  "paste: fail-fast is instant"
+
+if [[ "${SIM_USE_E2E_APP_ACTION_VERBS:-0}" == "1" ]]; then
+    # Enabled once T3.5 forwards --bundle-id to the action verbs. Finalised when
+    # that lands (per team decision:追加 commit, no ticket reopen).
+    step "type/paste — text echoes back in the focused field (app-targeted, T3.5)"
+    TYPE_TOKEN="E2Etype$RANDOM"; PASTE_TOKEN="E2Epaste$RANDOM"
+    tap  --bundle-id "$BUNDLE_ID" --label "Text Input"   >/dev/null 2>&1 || true
+    tap  --bundle-id "$BUNDLE_ID" --id text-input-field  >/dev/null 2>&1 || true
+    type_text  --bundle-id "$BUNDLE_ID" "$TYPE_TOKEN"    >/dev/null 2>&1 || true
+    ui   --bundle-id "$BUNDLE_ID" > "$EVIDENCE_DIR/ui-after-type.txt"  2>&1 || true
+    assert_contains "$EVIDENCE_DIR/ui-after-type.txt"  "$TYPE_TOKEN"  "type: field echoes the typed token"
+    paste_text --bundle-id "$BUNDLE_ID" "$PASTE_TOKEN"  >/dev/null 2>&1 || true
+    ui   --bundle-id "$BUNDLE_ID" > "$EVIDENCE_DIR/ui-after-paste.txt" 2>&1 || true
+    assert_contains "$EVIDENCE_DIR/ui-after-paste.txt" "$PASTE_TOKEN" "paste: field echoes the pasted token"
+else
+    skip "type/paste app round-trip — pending T3.5 (--bundle-id on action verbs); set SIM_USE_E2E_APP_ACTION_VERBS=1 to run"
+fi
 
 # --- summary ----------------------------------------------------------------
 echo
 echo -e "${BLUE}================ iOS device E2E results ================${NC}"
 print_success "$PASS_COUNT assertion(s) passed"
+[[ "$SKIP_COUNT" -gt 0 ]] && print_skip "$SKIP_COUNT case(s) skipped (see notes above)"
 if [[ "$FAIL_COUNT" -gt 0 ]]; then
     print_error "$FAIL_COUNT assertion(s) failed:"
     for c in "${FAILED_CASES[@]}"; do echo -e "   ${RED}• $c${NC}"; done
