@@ -1,0 +1,42 @@
+{
+  "info": {
+    "arguments": ["devicectl", "list", "devices"],
+    "commandType": "devicectl.list.devices",
+    "jsonVersion": 2,
+    "outcome": "success"
+  },
+  "result": {
+    "devices": [
+      {
+        "identifier": "B98CC0CB-CF18-5867-9595-869A35AFE502",
+        "connectionProperties": { "pairingState": "paired", "tunnelState": "connected" },
+        "deviceProperties": { "name": "CP 16 Pro Max", "osVersionNumber": "18.7.8" },
+        "hardwareProperties": { "deviceType": "iPhone", "platform": "iOS", "productType": "iPhone17,2", "udid": "00008140-00096D5C0CEA801C" }
+      },
+      {
+        "identifier": "979C9B98-CA56-564F-988D-621A6EDD4697",
+        "connectionProperties": { "pairingState": "paired", "tunnelState": "disconnected" },
+        "deviceProperties": { "name": "Richard iPhone", "osVersionNumber": "26.5.2" },
+        "hardwareProperties": { "deviceType": "iPhone", "platform": "iOS", "productType": "iPhone16,2", "udid": "00008130-001410193811401C" }
+      },
+      {
+        "identifier": "AC19D319-4DDC-5906-A05E-853EAB5871B8",
+        "connectionProperties": { "pairingState": "paired", "tunnelState": "connected" },
+        "deviceProperties": { "name": "iPhone 11 Pro R", "osVersionNumber": "18.7.8" },
+        "hardwareProperties": { "deviceType": "iPhone", "platform": "iOS", "productType": "iPhone12,3", "udid": "00008030-00161DEC1102802E" }
+      },
+      {
+        "identifier": "B1BFAB36-5574-5809-9946-6963BC5F39F4",
+        "connectionProperties": { "pairingState": "paired", "tunnelState": "unavailable" },
+        "deviceProperties": { "name": "書房", "osVersionNumber": "26.5" },
+        "hardwareProperties": { "deviceType": "appleTV", "platform": "tvOS", "productType": "AppleTV14,1", "udid": "00008110-000E3D101A89401E" }
+      },
+      {
+        "identifier": "4FFD0A09-EFD9-5AC1-84C5-0017593399A3",
+        "connectionProperties": { "pairingState": "paired", "tunnelState": "connected" },
+        "deviceProperties": { "name": "辦公桌tv理查", "osVersionNumber": "26.5" },
+        "hardwareProperties": { "deviceType": "appleTV", "platform": "tvOS", "productType": "AppleTV5,3", "udid": "c311e5afe90ee702b80e8b64e1e12796e04e63a0" }
+      }
+    ]
+  }
+}
