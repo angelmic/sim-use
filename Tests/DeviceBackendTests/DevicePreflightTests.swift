@@ -120,29 +120,4 @@ final class DevicePreflightTests: XCTestCase {
             XCTFail("expected DevicePreflightError, got \(error)")
         }
     }
-
-    private func statusOK() -> Result<AppiumResponse, Error> {
-        .success(AppiumResponse(statusCode: 200, body: Data(#"{"value":{"ready":true}}"#.utf8)))
-    }
-}
-
-/// Records requests and replays a scripted response queue. Mirrors the
-/// AppiumCoreTests transport so both suites share one mental model.
-actor MockTransport: AppiumTransport {
-    private var responses: [Result<AppiumResponse, Error>]
-    private(set) var requests: [AppiumRequest] = []
-
-    init(responses: [Result<AppiumResponse, Error>]) {
-        self.responses = responses
-    }
-
-    func send(_ request: AppiumRequest) async throws -> AppiumResponse {
-        requests.append(request)
-        guard !responses.isEmpty else {
-            throw AppiumError.invalidResponse("MockTransport ran out of scripted responses")
-        }
-        return try responses.removeFirst().get()
-    }
-
-    func recordedRequests() -> [AppiumRequest] { requests }
 }
