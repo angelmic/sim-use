@@ -136,6 +136,8 @@ struct Gesture: SimUseExecutableCommand {
             return try await executeAndroid()
         case .tvOSSim:
             throw TVOSCapabilityError(command: "gesture")
+        case .appleDevice:
+            throw DeviceBackendUnsupportedError(command: "gesture", deviceId: device.resolved)
         case .iOSSim, .none:
             return try await executeIOSSim()
         }

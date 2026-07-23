@@ -120,6 +120,8 @@ struct Tap: SimUseExecutableCommand {
             return try executeAndroid()
         case .tvOSSim:
             throw TVOSCapabilityError(command: "tap")
+        case .appleDevice:
+            throw DeviceBackendUnsupportedError(command: "tap", deviceId: device.resolved)
         case .iOSSim, .none:
             // .none here means the UDID didn't match either platform
             // shape; defer to iOS so the existing "not booted /

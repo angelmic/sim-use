@@ -20,6 +20,7 @@ struct DescribeUI: SimUseExecutableCommand {
         case android
         case iOSSimulator
         case tvOSSimulator
+        case appleDevice
     }
 
     static let configuration = CommandConfiguration(
@@ -121,6 +122,8 @@ struct DescribeUI: SimUseExecutableCommand {
             return try await executeTVOS()
         case .iOSSimulator:
             return try await executeIOSSim()
+        case .appleDevice:
+            throw DeviceBackendUnsupportedError(command: "describe-ui", deviceId: device.resolved)
         }
     }
 
@@ -130,6 +133,8 @@ struct DescribeUI: SimUseExecutableCommand {
             return .android
         case .tvOSSim:
             return .tvOSSimulator
+        case .appleDevice:
+            return .appleDevice
         case .iOSSim, .none:
             return .iOSSimulator
         }

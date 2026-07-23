@@ -130,6 +130,8 @@ struct MultiTouch: SimUseExecutableCommand {
             return try await executeAndroid()
         case .tvOSSim:
             throw TVOSCapabilityError(command: "multi-touch")
+        case .appleDevice:
+            throw DeviceBackendUnsupportedError(command: "multi-touch", deviceId: device.resolved)
         case .iOSSim, .none:
             return try await executeIOSSim()
         }

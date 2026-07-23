@@ -23,6 +23,7 @@ struct Screenshot: SimUseExecutableCommand {
         case android
         case iOSSimulator
         case tvOSSimulator
+        case appleDevice
     }
 
     static let configuration = CommandConfiguration(
@@ -63,6 +64,8 @@ struct Screenshot: SimUseExecutableCommand {
             return try await executeTVOS()
         case .iOSSimulator:
             return try await executeIOSSim()
+        case .appleDevice:
+            throw DeviceBackendUnsupportedError(command: "screenshot", deviceId: device.resolved)
         }
     }
 
@@ -72,6 +75,8 @@ struct Screenshot: SimUseExecutableCommand {
             return .android
         case .tvOSSim:
             return .tvOSSimulator
+        case .appleDevice:
+            return .appleDevice
         case .iOSSim, .none:
             return .iOSSimulator
         }

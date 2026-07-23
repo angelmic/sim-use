@@ -65,6 +65,8 @@ struct RecordVideo: SimUseExecutableCommand {
             return try await executeAndroid()
         case .tvOSSim:
             throw TVOSCapabilityError(command: "record-video")
+        case .appleDevice:
+            throw DeviceBackendUnsupportedError(command: "record-video", deviceId: device.resolved)
         case .iOSSim, .none:
             return try await executeIOSSim()
         }
