@@ -245,7 +245,12 @@ let package = Package(
         .testTarget(
             name: "SimUseCoreTests",
             dependencies: ["SimUseCore"],
-            path: "Tests/SimUseCoreTests"
+            path: "Tests/SimUseCoreTests",
+            resources: [
+                // Real `devicectl list devices --json-output` capture used
+                // to unit-test AppleDeviceLister parsing without a device.
+                .copy("Fixtures")
+            ]
         ),
         .testTarget(
             name: "AndroidBackendTests",
