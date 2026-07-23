@@ -56,7 +56,7 @@ public struct TVOSDeviceController: Sendable {
             throw TVOSDeviceUIUnsupportedError(udid: udid, osMajorVersion: info.osMajorVersion)
         }
         let caps = try capabilities(for: info, bundleId: bundleId)
-        return try await client.withSession(capabilities: caps) { session in
+        return try await withActivatedSession(caps, bundleId: bundleId) { session in
             try TVOSOutlineRenderer.render(source: try await session.source(), includeRaw: includeRaw)
         }
     }
@@ -70,7 +70,7 @@ public struct TVOSDeviceController: Sendable {
     ) async throws -> TVOSRemoteResult {
         let info = try await preflight.run(udid: udid)
         let caps = try capabilities(for: info, bundleId: bundleId)
-        return try await client.withSession(capabilities: caps) { session in
+        return try await withActivatedSession(caps, bundleId: bundleId) { session in
             // No HID fast path on a physical TV — the press always goes
             // through Appium. Focus is observed only when asked, since each
             // source round-trip costs a WDA hierarchy fetch.
@@ -87,7 +87,7 @@ public struct TVOSDeviceController: Sendable {
     public func screenshot(udid: String, bundleId: String? = nil) async throws -> Data {
         let info = try await preflight.run(udid: udid)
         let caps = try capabilities(for: info, bundleId: bundleId)
-        return try await client.withSession(capabilities: caps) { session in
+        return try await withActivatedSession(caps, bundleId: bundleId) { session in
             try await session.screenshot()
         }
     }
@@ -99,8 +99,28 @@ public struct TVOSDeviceController: Sendable {
     }
 
     private func capabilities(for info: PhysicalDeviceInfo, bundleId: String?) throws -> AppiumCapabilities {
-        let resolvedBundleId = bundleId?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyOrNil ?? defaultBundleId
-        return try DeviceCapabilityBuilder.capabilities(for: info, bundleId: resolvedBundleId, config: config)
+        try DeviceCapabilityBuilder.capabilities(for: info, bundleId: resolvedBundleId(bundleId), config: config)
+    }
+
+    private func resolvedBundleId(_ bundleId: String?) -> String? {
+        bundleId?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyOrNil ?? defaultBundleId
+    }
+
+    /// Open a session and, when a bundle is targeted, foreground it at its
+    /// current screen with `mobile: activateApp` (activate — not launch)
+    /// before the verb runs, matching the iOS device path.
+    private func withActivatedSession<Result>(
+        _ capabilities: AppiumCapabilities,
+        bundleId: String?,
+        operation: @escaping (AppiumSession) async throws -> Result
+    ) async throws -> Result {
+        let resolved = resolvedBundleId(bundleId)
+        return try await client.withSession(capabilities: capabilities) { session in
+            if let resolved {
+                try await session.execute(script: "mobile: activateApp", args: [["bundleId": resolved]])
+            }
+            return try await operation(session)
+        }
     }
 }
 

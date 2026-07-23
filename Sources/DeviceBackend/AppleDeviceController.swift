@@ -61,7 +61,7 @@ public struct AppleDeviceController: Sendable {
     ) async throws -> DescribeUIResult {
         let info = try await preflight.run(udid: udid)
         let caps = try capabilities(for: info, bundleId: bundleId)
-        let result = try await client.withSession(capabilities: caps) { session in
+        let result = try await withActivatedSession(capabilities: caps, bundleId: bundleId) { session in
             try DeviceOutlineRenderer.render(source: try await session.source(), includeRaw: includeRaw)
         }
         // Persist the alias cache so `tap @N` / `#N` resolve cross-command,
@@ -93,7 +93,7 @@ public struct AppleDeviceController: Sendable {
 
         switch target {
         case .point(let x, let y):
-            try await client.withSession(capabilities: caps) { session in
+            try await withActivatedSession(capabilities: caps, bundleId: bundleId) { session in
                 try await session.performPointerActions(PointerAction.tap(x: x, y: y, holdMs: holdMs))
             }
             return (x, y)
@@ -101,7 +101,7 @@ public struct AppleDeviceController: Sendable {
         case .cachedAlias(let raw):
             // Cache-backed: resolve the center before opening the session.
             let resolved = try OutlineAliasResolver.resolve(raw, udid: udid, home: cacheHome)
-            try await client.withSession(capabilities: caps) { session in
+            try await withActivatedSession(capabilities: caps, bundleId: bundleId) { session in
                 try await session.performPointerActions(
                     PointerAction.tap(x: resolved.point.x, y: resolved.point.y, holdMs: holdMs)
                 )
@@ -109,7 +109,7 @@ public struct AppleDeviceController: Sendable {
             return resolved.point
 
         case .selector(let selector):
-            return try await client.withSession(capabilities: caps) { session in
+            return try await withActivatedSession(capabilities: caps, bundleId: bundleId) { session in
                 let result = try DeviceOutlineRenderer.render(source: try await session.source(), includeRaw: false)
                 let entry = try DeviceSelectorResolver.resolve(selector, in: result.entries, screen: result.screen)
                 let point = DeviceSelectorResolver.center(of: entry)
@@ -131,7 +131,7 @@ public struct AppleDeviceController: Sendable {
         let info = try await preflight.run(udid: udid)
         try requireIOS(info, command: "swipe")
         let caps = try capabilities(for: info, bundleId: bundleId)
-        try await client.withSession(capabilities: caps) { session in
+        try await withActivatedSession(capabilities: caps, bundleId: bundleId) { session in
             try await session.performPointerActions(
                 PointerAction.swipe(fromX: from.x, fromY: from.y, toX: to.x, toY: to.y, durationMs: durationMs)
             )
@@ -148,7 +148,7 @@ public struct AppleDeviceController: Sendable {
         let info = try await preflight.run(udid: udid)
         try requireIOS(info, command: "type")
         let caps = try capabilities(for: info, bundleId: bundleId)
-        try await client.withSession(capabilities: caps) { session in
+        try await withActivatedSession(capabilities: caps, bundleId: bundleId) { session in
             let element = try await session.activeElement()
             try await session.sendKeys(text, elementID: element)
         }
@@ -165,7 +165,7 @@ public struct AppleDeviceController: Sendable {
         try requireIOS(info, command: "paste")
         let caps = try capabilities(for: info, bundleId: bundleId)
         let encoded = Data(text.utf8).base64EncodedString()
-        try await client.withSession(capabilities: caps) { session in
+        try await withActivatedSession(capabilities: caps, bundleId: bundleId) { session in
             // Seed the device pasteboard (bypasses IME composition), then
             // deliver the text into the focused field. WDA has no
             // hardware-Cmd+V on a physical device, so the send is what
@@ -190,7 +190,7 @@ public struct AppleDeviceController: Sendable {
     ) async throws -> Data {
         let info = try await preflight.run(udid: udid)
         let caps = try capabilities(for: info, bundleId: bundleId)
-        return try await client.withSession(capabilities: caps) { session in
+        return try await withActivatedSession(capabilities: caps, bundleId: bundleId) { session in
             try await session.screenshot()
         }
     }
@@ -199,6 +199,22 @@ public struct AppleDeviceController: Sendable {
 
     private func capabilities(for info: PhysicalDeviceInfo, bundleId: String?) throws -> AppiumCapabilities {
         try DeviceCapabilityBuilder.capabilities(for: info, bundleId: bundleId, config: config)
+    }
+
+    /// Open a session and, when a bundle is targeted, foreground that app at
+    /// its current screen with `mobile: activateApp` (activate — not launch)
+    /// before running the verb, so navigation from a prior command survives.
+    private func withActivatedSession<Result>(
+        capabilities: AppiumCapabilities,
+        bundleId: String?,
+        operation: @escaping (AppiumSession) async throws -> Result
+    ) async throws -> Result {
+        try await client.withSession(capabilities: capabilities) { session in
+            if let bundleId = bundleId?.trimmingCharacters(in: .whitespacesAndNewlines), !bundleId.isEmpty {
+                try await session.execute(script: "mobile: activateApp", args: [["bundleId": bundleId]])
+            }
+            return try await operation(session)
+        }
     }
 
     /// Coordinate/keyboard verbs have no meaning on focus-driven tvOS —

@@ -112,19 +112,27 @@ final class AppleDeviceControllerTests: XCTestCase {
         XCTAssertEqual(actions.actions.first?.actions.first?.y, 98)
     }
 
-    func testTapForwardsBundleIdToSessionCaps() async throws {
+    func testTapForwardsBundleIdAndActivatesApp() async throws {
         let (controller, transport) = makeController(
-            [statusOK(), sessionResponse(), emptyOK(), emptyOK()],
+            [statusOK(), sessionResponse(), emptyOK(), emptyOK(), emptyOK()],
             device: iPhone()
         )
         _ = try await controller.tap(udid: iPhoneUDID, target: .point(x: 1, y: 2), bundleId: "com.example.app")
         let requests = await transport.recordedRequests()
-        // Session POST is index 1 (index 0 is the preflight GET /status).
+        // Session POST (index 1): attach + activate semantics, not launch.
         let caps = try JSONDecoder().decode(SessionCapsProbe.self, from: try XCTUnwrap(requests[1].body))
         XCTAssertEqual(caps.capabilities.alwaysMatch.bundleId, "com.example.app")
-        XCTAssertEqual(caps.capabilities.alwaysMatch.autoLaunch, true)
+        XCTAssertEqual(caps.capabilities.alwaysMatch.autoLaunch, false)
         XCTAssertEqual(caps.capabilities.alwaysMatch.noReset, true)
-        XCTAssertEqual(caps.capabilities.alwaysMatch.forceAppLaunch, false)
+        XCTAssertEqual(caps.capabilities.alwaysMatch.shouldTerminateApp, false)
+        // The app is foregrounded via mobile: activateApp before the tap.
+        XCTAssertEqual(requests.map { $0.url.path }, [
+            "/status", "/session", "/session/session-1/execute/sync",
+            "/session/session-1/actions", "/session/session-1",
+        ])
+        let activate = try JSONDecoder().decode(ExecuteProbe.self, from: try XCTUnwrap(requests[2].body))
+        XCTAssertEqual(activate.script, "mobile: activateApp")
+        XCTAssertEqual(activate.args.first?["bundleId"], "com.example.app")
     }
 
     // MARK: - swipe
@@ -263,12 +271,12 @@ final class AppleDeviceControllerTests: XCTestCase {
                 let bundleId: String?
                 let autoLaunch: Bool?
                 let noReset: Bool?
-                let forceAppLaunch: Bool?
+                let shouldTerminateApp: Bool?
                 enum CodingKeys: String, CodingKey {
                     case bundleId = "appium:bundleId"
                     case autoLaunch = "appium:autoLaunch"
                     case noReset = "appium:noReset"
-                    case forceAppLaunch = "appium:forceAppLaunch"
+                    case shouldTerminateApp = "appium:shouldTerminateApp"
                 }
             }
             let alwaysMatch: AlwaysMatch
