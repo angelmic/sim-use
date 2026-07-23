@@ -7,11 +7,11 @@
 
 | 票 | 主題 | blockers | 狀態 |
 |---|---|---|---|
-| T1 | AppiumCore 抽出（泛化 TVOSAppiumClient/Transport） | — | **done-with-deferred-e2e**（e2e Appium-path 待 Mac 修復後 T5 補跑） |
+| T1 | AppiumCore 抽出（泛化 TVOSAppiumClient/Transport） | — | **done**（deferred e2e 已於 T5 補跑全綠 17/17，2026-07-23） |
 | T2 | PlatformRouter/DeviceResolver 認實機（雙 UDID 格式） | T1 | done |
 | T3 | DeviceBackend verbs＋前置檢查（iOS 全套；tvOS 依版本分層） | T1,T2 | done |
-| T4 | iOS device e2e suite（xcodegen playground fixture） | T3 | in_progress |
-| T5 | 收尾（install 驗證、docs、sim 迴歸） | T1-T4 | blocked |
+| T4 | iOS device e2e suite（xcodegen playground fixture） | T3 | done（13 assertions＋paste-gap skip） |
+| T5 | 收尾（install 驗證、docs、sim 迴歸） | T1-T4 | done（main 親跑 2026-07-23） |
 
 驗收指令基準：
 - unit：`swift test`（worktree 根目錄）
