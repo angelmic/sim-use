@@ -4,6 +4,7 @@ import Foundation
 import SimUseCore
 import AndroidBackend
 import iOSSimBackend
+import DeviceBackend
 
 /// Top-level cross-platform `tap` verb. Owns the verb-specific flag
 /// surface, resolves the target platform via `PlatformRouter`, then
@@ -96,10 +97,10 @@ struct Tap: SimUseExecutableCommand {
 
     var simulatorUDIDForDaemon: String? { device.resolved }
 
-    /// tvOS never serves this verb (`execute()` throws
-    /// `TVOSCapabilityError`), so reject in-process instead of spawning a
-    /// per-UDID daemon for a device the daemon cannot drive.
-    var daemonBypass: Bool { PlatformRouter.resolve(udid: device.resolved) == .tvOSSim }
+    /// The FBSimulator daemon drives only iOS Simulators; tvOS and physical
+    /// Apple devices run through Appium, so reject/route in-process instead
+    /// of spawning a per-UDID daemon for a target it cannot drive.
+    var daemonBypass: Bool { PlatformRouter.bypassesSimulatorDaemon(udid: device.resolved) }
 
     typealias ExecutionResult = IOSSimTapCommand.ExecutionResult
 
@@ -121,7 +122,7 @@ struct Tap: SimUseExecutableCommand {
         case .tvOSSim:
             throw TVOSCapabilityError(command: "tap")
         case .appleDevice:
-            throw DeviceBackendUnsupportedError(command: "tap", deviceId: device.resolved)
+            return try await executeAppleDevice()
         case .iOSSim, .none:
             // .none here means the UDID didn't match either platform
             // shape; defer to iOS so the existing "not booted /
@@ -150,6 +151,46 @@ struct Tap: SimUseExecutableCommand {
             device: device,
             json: json
         )
+    }
+
+    /// Physical iOS device: resolve the target (coordinates, cached alias,
+    /// or a live selector) and dispatch a W3C tap through WebDriverAgent.
+    /// The controller rejects a tvOS device with `TVOSCapabilityError`.
+    private func executeAppleDevice() async throws -> ExecutionResult {
+        let holdMs = duration.map { Int(($0 * 1000).rounded()) } ?? 0
+        let point = try await AppleDeviceController.live().tap(
+            udid: device.resolved,
+            target: try makeDeviceTapTarget(),
+            holdMs: holdMs
+        )
+        return ExecutionResult(x: point.x, y: point.y)
+    }
+
+    /// Map the parsed targeting flags to a `DeviceTapTarget`, mirroring the
+    /// precedence `TapTargetingOptions.validate` already enforced.
+    private func makeDeviceTapTarget() throws -> DeviceTapTarget {
+        if let point = try TapCoordinateResolver.resolve(
+            x: targeting.pointX, y: targeting.pointY, point: targeting.point
+        ) {
+            return .point(x: point.x, y: point.y)
+        }
+        let frame = targeting.frameSpecs.isEmpty ? nil : try SelectorFrameFilter(specs: targeting.frameSpecs)
+        if let alias {
+            // `#<id>` resolves live like `--id`; `@N` / `#N` come from the cache.
+            if case .id(let value) = OutlineAliasResolver.parse(alias) {
+                return .selector(DeviceSelector(id: value, elementType: targeting.elementType, frame: frame))
+            }
+            return .cachedAlias(alias)
+        }
+        return .selector(DeviceSelector(
+            id: targeting.elementID,
+            label: targeting.elementLabel,
+            labelContains: targeting.labelContains,
+            labelRegex: targeting.labelRegex,
+            value: targeting.elementValue,
+            elementType: targeting.elementType,
+            frame: frame
+        ))
     }
 
     /// Forward to the Android backend. Symmetric to `executeIOSSim` —

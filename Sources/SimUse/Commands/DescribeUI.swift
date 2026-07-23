@@ -5,6 +5,7 @@ import SimUseCore
 import AndroidBackend
 import iOSSimBackend
 import TVOSBackend
+import DeviceBackend
 
 /// Top-level cross-platform `describe-ui` verb. Owns the flag surface
 /// and resolves the target platform, then delegates to the per-backend
@@ -86,10 +87,10 @@ struct DescribeUI: SimUseExecutableCommand {
 
     var jsonOutput: Bool { json.enabled }
 
-    /// tvOS uses its own short-lived Appium session and must not be routed
-    /// through the iOS FBSimulator daemon.
+    /// tvOS and physical Apple devices use short-lived Appium sessions and
+    /// must not be routed through the iOS FBSimulator daemon.
     var daemonBypass: Bool {
-        Self.executionBackend(for: PlatformRouter.resolve(udid: device.resolved)) == .tvOSSimulator
+        PlatformRouter.bypassesSimulatorDaemon(udid: device.resolved)
     }
 
     @Flag(
@@ -123,7 +124,7 @@ struct DescribeUI: SimUseExecutableCommand {
         case .iOSSimulator:
             return try await executeIOSSim()
         case .appleDevice:
-            throw DeviceBackendUnsupportedError(command: "describe-ui", deviceId: device.resolved)
+            return try await executeAppleDevice()
         }
     }
 
@@ -151,8 +152,30 @@ struct DescribeUI: SimUseExecutableCommand {
 
     private func executeTVOS() async throws -> ExecutionResult {
         let sub = makeTVOSSubcommand()
-        let result = try await sub.execute()
-        return ExecutionResult(
+        return reshape(try await sub.execute())
+    }
+
+    /// Physical Apple device: an Apple TV renders through the tvOS device
+    /// path (focus-aware, ≤16 ui fail-fast); an iPhone/iPad through the iOS
+    /// device outline (#id selectors). Family comes from `devicectl`; an
+    /// unresolved UDID defaults to the iOS path, whose preflight surfaces
+    /// the clearer not-found / tunnel error.
+    private func executeAppleDevice() async throws -> ExecutionResult {
+        let bundleId = tvosTarget.bundleId
+        if DeviceInfoResolver().resolve(udid: device.resolved)?.family == .tvos {
+            return reshape(try await TVOSDeviceController.live().describeUI(
+                udid: device.resolved, includeRaw: jsonOutput, bundleId: bundleId
+            ))
+        }
+        return reshape(try await AppleDeviceController.live().describeUI(
+            udid: device.resolved, includeRaw: jsonOutput, bundleId: bundleId
+        ))
+    }
+
+    /// Map the shared cross-platform envelope into this command's local
+    /// `ExecutionResult` so every backend surfaces one shape.
+    private func reshape(_ result: DescribeUIResult) -> ExecutionResult {
+        ExecutionResult(
             platform: result.platform.rawValue,
             raw: result.raw,
             outline: result.outline,
