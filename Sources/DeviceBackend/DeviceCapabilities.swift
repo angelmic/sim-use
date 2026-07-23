@@ -5,11 +5,14 @@ import SimUseCore
 
 /// Tunables for physical-device capability assembly, all overridable by
 /// environment so a differently-signed WebDriverAgent or a non-default
-/// port needs no rebuild. Defaults are the values validated against the
-/// office devices in Phase 0 (P0-C2/C3, tvOS 26 Addendum).
+/// port needs no rebuild. Defaults are app/team-agnostic (D7: the CLI never
+/// bakes in a value specific to one app or developer account) — the WDA
+/// bundle ids follow the upstream WebDriverAgent naming convention, and the
+/// Team id has no universal default (see `xcodeOrgId`).
 public struct DeviceCapabilityConfig: Sendable, Equatable {
     /// iOS preinstalled WDA product id, **without** the `.xctrunner`
-    /// suffix — the XCUITest driver appends it when launching.
+    /// suffix — the XCUITest driver appends it when launching. Override for
+    /// a re-signed WDA via `SIM_USE_WDA_BUNDLE_ID`.
     public var iosWDABundleId: String
     /// Mac-side port the driver binds to proxy on-device WDA
     /// (`appium:wdaLocalPort`), for both iOS and tvOS. Explicit rather than
@@ -17,10 +20,17 @@ public struct DeviceCapabilityConfig: Sendable, Equatable {
     /// dodge a port already held by another Appium (P0-C2's "change
     /// wdaLocalPort to bypass" recovery).
     public var wdaLocalPort: Int
-    /// tvOS xcodebuild-flow WDA product id (again suffix-free).
+    /// tvOS xcodebuild-flow WDA product id (again suffix-free). Override via
+    /// `SIM_USE_TVOS_WDA_BUNDLE_ID`.
     public var tvosWDABundleId: String
-    /// Team id and signing identity for the tvOS xcodebuild WDA build.
-    public var xcodeOrgId: String
+    /// Apple Developer **Team id** for the tvOS xcodebuild WDA build. No
+    /// universal default exists (it is account-specific), so it is Optional;
+    /// the tvOS device path fails fast when it is needed but unset. Supply
+    /// via `SIM_USE_XCODE_ORG_ID`.
+    public var xcodeOrgId: String?
+    /// Signing identity for the tvOS xcodebuild WDA build. "Apple
+    /// Development" is Apple's generic identity name (not account-specific),
+    /// so it is a safe default; override via `SIM_USE_XCODE_SIGNING_ID`.
     public var xcodeSigningId: String
     /// External WebDriverAgent URL for classic (≤16.x) devices. Nil unless
     /// `SIM_USE_WDA_URL` is set; a classic device without it fails fast.
@@ -31,10 +41,10 @@ public struct DeviceCapabilityConfig: Sendable, Equatable {
     public var newCommandTimeout: Int
 
     public init(
-        iosWDABundleId: String = "com.catchplay.WebDriverAgentRunner",
+        iosWDABundleId: String = "com.facebook.WebDriverAgentRunner",
         wdaLocalPort: Int = 8100,
-        tvosWDABundleId: String = "com.catchplay.wda",
-        xcodeOrgId: String = "MKK9DM2XD9",
+        tvosWDABundleId: String = "com.facebook.WebDriverAgentRunner",
+        xcodeOrgId: String? = nil,
         xcodeSigningId: String = "Apple Development",
         externalWDAURL: String? = nil,
         newCommandTimeout: Int = 120
@@ -107,8 +117,14 @@ public enum DeviceCapabilityBuilder {
         caps.wdaLocalPort = config.wdaLocalPort
         switch info.family {
         case .tvos:
+            // The tvOS xcodebuild flow signs WDA with the caller's Apple
+            // Developer Team, which the CLI cannot guess — fail fast when it
+            // is unset rather than emitting an unsigned build that hangs.
+            guard let orgId = config.xcodeOrgId else {
+                throw DevicePreflightError.xcodeOrgIdMissing(udid: info.udid)
+            }
             caps.updatedWDABundleId = config.tvosWDABundleId
-            caps.xcodeOrgId = config.xcodeOrgId
+            caps.xcodeOrgId = orgId
             caps.xcodeSigningId = config.xcodeSigningId
         case .ios, .android:
             // .android never reaches here (PhysicalDeviceInfo rejects it);

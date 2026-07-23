@@ -28,7 +28,9 @@ final class TVOSDeviceControllerTests: XCTestCase {
                 statusTransport: transport,
                 infoResolver: DeviceInfoResolver(provider: { [device] })
             ),
-            config: DeviceCapabilityConfig()
+            // Team id has no default (D7); supply one so the tvOS xcodebuild
+            // caps assemble instead of failing fast.
+            config: DeviceCapabilityConfig(xcodeOrgId: "TEAMID1234")
         )
         return (controller, transport)
     }
@@ -49,8 +51,8 @@ final class TVOSDeviceControllerTests: XCTestCase {
         // The session must carry the xcodebuild-flow caps, not Simulator ones.
         let caps = try JSONDecoder().decode(CapsProbe.self, from: try XCTUnwrap(requests[1].body))
         XCTAssertEqual(caps.capabilities.alwaysMatch.platformName, "tvOS")
-        XCTAssertEqual(caps.capabilities.alwaysMatch.xcodeOrgId, "MKK9DM2XD9")
-        XCTAssertEqual(caps.capabilities.alwaysMatch.updatedWDABundleId, "com.catchplay.wda")
+        XCTAssertEqual(caps.capabilities.alwaysMatch.xcodeOrgId, "TEAMID1234")
+        XCTAssertEqual(caps.capabilities.alwaysMatch.updatedWDABundleId, "com.facebook.WebDriverAgentRunner")
     }
 
     func testClassicDeviceUIFailsFastBeforeSession() async {

@@ -26,7 +26,7 @@ final class DeviceCapabilitiesTests: XCTestCase {
         XCTAssertEqual(wire["appium:automationName"] as? String, "XCUITest")
         XCTAssertEqual(wire["appium:udid"] as? String, "UDID-1")
         XCTAssertEqual(wire["appium:usePreinstalledWDA"] as? Bool, true)
-        XCTAssertEqual(wire["appium:updatedWDABundleId"] as? String, "com.catchplay.WebDriverAgentRunner")
+        XCTAssertEqual(wire["appium:updatedWDABundleId"] as? String, "com.facebook.WebDriverAgentRunner")
         XCTAssertEqual(wire["appium:wdaLocalPort"] as? Int, 8100)
         XCTAssertEqual(wire["appium:newCommandTimeout"] as? Int, 120)
         // The device path must not leak the tvOS xcodebuild or classic keys.
@@ -37,21 +37,41 @@ final class DeviceCapabilitiesTests: XCTestCase {
     // MARK: - tvOS 26 (xcodebuild flow)
 
     func testTVOSModernUsesXcodebuildFlow() throws {
+        // Team id has no default (D7) — supply one to reach the success path.
+        var cfg = config
+        cfg.xcodeOrgId = "TEAMID1234"
         let caps = try DeviceCapabilityBuilder.capabilities(
-            for: info(family: .tvos, major: 26), bundleId: "com.catchplay.tvos", config: config
+            for: info(family: .tvos, major: 26), bundleId: "com.example.tvapp", config: cfg
         )
         let wire = try encoded(caps)
         XCTAssertEqual(wire["platformName"] as? String, "tvOS")
-        XCTAssertEqual(wire["appium:xcodeOrgId"] as? String, "MKK9DM2XD9")
+        XCTAssertEqual(wire["appium:xcodeOrgId"] as? String, "TEAMID1234")
         XCTAssertEqual(wire["appium:xcodeSigningId"] as? String, "Apple Development")
-        XCTAssertEqual(wire["appium:updatedWDABundleId"] as? String, "com.catchplay.wda")
-        XCTAssertEqual(wire["appium:bundleId"] as? String, "com.catchplay.tvos")
+        XCTAssertEqual(wire["appium:updatedWDABundleId"] as? String, "com.facebook.WebDriverAgentRunner")
+        XCTAssertEqual(wire["appium:bundleId"] as? String, "com.example.tvapp")
         // wdaLocalPort applies to tvOS too, so a second task-owned server can
         // dodge a port another Appium already holds (P0-C2 recovery).
         XCTAssertEqual(wire["appium:wdaLocalPort"] as? Int, 8100)
         // No preinstalled path on tvOS: usePreinstalledWDA must be absent.
         XCTAssertNil(wire["appium:usePreinstalledWDA"])
         XCTAssertNil(wire["appium:webDriverAgentUrl"])
+    }
+
+    func testTVOSModernWithoutOrgIdFailsFast() {
+        // Default config has no Team id (D7): the tvOS xcodebuild flow must
+        // fail fast with a format-only hint, never a baked-in team id.
+        XCTAssertThrowsError(
+            try DeviceCapabilityBuilder.capabilities(
+                for: info(family: .tvos, major: 26), bundleId: nil, config: config
+            )
+        ) { error in
+            guard case DevicePreflightError.xcodeOrgIdMissing = error else {
+                return XCTFail("expected .xcodeOrgIdMissing, got \(error)")
+            }
+            let hint = (error as? HintProviding)?.hint ?? ""
+            XCTAssertTrue(hint.contains("SIM_USE_XCODE_ORG_ID"))
+            XCTAssertFalse(hint.contains("MKK9DM2XD9"), "hint must not carry a specific team id")
+        }
     }
 
     // MARK: - Classic ≤16.x (external WDA URL / fail-fast)
@@ -77,7 +97,7 @@ final class DeviceCapabilitiesTests: XCTestCase {
             guard case DevicePreflightError.classicWDAMissing(_, let bundleId) = error else {
                 return XCTFail("expected .classicWDAMissing, got \(error)")
             }
-            XCTAssertEqual(bundleId, "com.catchplay.wda")
+            XCTAssertEqual(bundleId, "com.facebook.WebDriverAgentRunner")
             let hint = (error as? HintProviding)?.hint ?? ""
             XCTAssertTrue(hint.contains("idevicedebug"))
             XCTAssertTrue(hint.contains("iproxy 8104:8100"))
@@ -113,9 +133,10 @@ final class DeviceCapabilitiesTests: XCTestCase {
 
     func testLiveConfigDefaultsWhenEnvironmentEmpty() {
         let cfg = DeviceCapabilityConfig.live(environment: [:])
-        XCTAssertEqual(cfg.iosWDABundleId, "com.catchplay.WebDriverAgentRunner")
-        XCTAssertEqual(cfg.tvosWDABundleId, "com.catchplay.wda")
-        XCTAssertEqual(cfg.xcodeOrgId, "MKK9DM2XD9")
+        // App/team-agnostic defaults (D7): WDA convention id, no team id.
+        XCTAssertEqual(cfg.iosWDABundleId, "com.facebook.WebDriverAgentRunner")
+        XCTAssertEqual(cfg.tvosWDABundleId, "com.facebook.WebDriverAgentRunner")
+        XCTAssertNil(cfg.xcodeOrgId)
         XCTAssertNil(cfg.externalWDAURL)
     }
 

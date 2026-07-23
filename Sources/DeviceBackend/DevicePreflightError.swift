@@ -23,6 +23,10 @@ public enum DevicePreflightError: Error, LocalizedError, HintProviding, Equatabl
     /// path on these OSes. Carries the bundle id of the residual WDA so the
     /// hint can name the exact `idevicedebug` / `iproxy` commands.
     case classicWDAMissing(udid: String, wdaBundleId: String)
+    /// A modern tvOS device builds WDA through the xcodebuild flow, which
+    /// signs with an Apple Developer Team id the CLI cannot guess — and it
+    /// is unset. iOS uses the preinstalled WDA and never hits this.
+    case xcodeOrgIdMissing(udid: String)
 
     public var errorDescription: String? {
         switch self {
@@ -34,6 +38,8 @@ public enum DevicePreflightError: Error, LocalizedError, HintProviding, Equatabl
             return "Physical device \(udid) is not reachable: CoreDevice tunnelState is \"\(state)\", not \"connected\"."
         case .classicWDAMissing(let udid, _):
             return "tvOS/iOS 16.x device \(udid) needs an external WebDriverAgent, but SIM_USE_WDA_URL is not set."
+        case .xcodeOrgIdMissing(let udid):
+            return "tvOS device \(udid) needs an Apple Developer Team id to build WebDriverAgent, but none is set."
         }
     }
 
@@ -60,6 +66,10 @@ public enum DevicePreflightError: Error, LocalizedError, HintProviding, Equatabl
                   export SIM_USE_WDA_URL=http://127.0.0.1:8104
                 This is the classic免-tunnel免-重簽 path (P0-C3); modern usePreinstalledWDA does not apply on ≤16.x.
                 """
+        case .xcodeOrgIdMissing:
+            return "Set SIM_USE_XCODE_ORG_ID to your Apple Developer Team id (a 10-character alphanumeric, format like ABCDE12345). "
+                + "Find it in Xcode > Settings > Accounts (your team's ID), on the developer portal, or via "
+                + "`security find-identity -v -p codesigning`. Optionally set SIM_USE_XCODE_SIGNING_ID (defaults to \"Apple Development\")."
         }
     }
 }
