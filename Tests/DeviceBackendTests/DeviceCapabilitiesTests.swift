@@ -29,6 +29,10 @@ final class DeviceCapabilitiesTests: XCTestCase {
         XCTAssertEqual(wire["appium:updatedWDABundleId"] as? String, "com.facebook.WebDriverAgentRunner")
         XCTAssertEqual(wire["appium:wdaLocalPort"] as? Int, 8100)
         XCTAssertEqual(wire["appium:newCommandTimeout"] as? Int, 120)
+        // noReset always on for a real device; autoLaunch off without a bundle.
+        XCTAssertEqual(wire["appium:noReset"] as? Bool, true)
+        XCTAssertEqual(wire["appium:autoLaunch"] as? Bool, false)
+        XCTAssertNil(wire["appium:bundleId"])
         // The device path must not leak the tvOS xcodebuild or classic keys.
         XCTAssertNil(wire["appium:xcodeOrgId"])
         XCTAssertNil(wire["appium:webDriverAgentUrl"])
@@ -49,6 +53,9 @@ final class DeviceCapabilitiesTests: XCTestCase {
         XCTAssertEqual(wire["appium:xcodeSigningId"] as? String, "Apple Development")
         XCTAssertEqual(wire["appium:updatedWDABundleId"] as? String, "com.facebook.WebDriverAgentRunner")
         XCTAssertEqual(wire["appium:bundleId"] as? String, "com.example.tvapp")
+        // A bundle id foregrounds that app and keeps its state across sessions.
+        XCTAssertEqual(wire["appium:autoLaunch"] as? Bool, true)
+        XCTAssertEqual(wire["appium:noReset"] as? Bool, true)
         // wdaLocalPort applies to tvOS too, so a second task-owned server can
         // dodge a port another Appium already holds (P0-C2 recovery).
         XCTAssertEqual(wire["appium:wdaLocalPort"] as? Int, 8100)

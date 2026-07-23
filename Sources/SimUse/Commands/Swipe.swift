@@ -39,6 +39,12 @@ struct Swipe: SimUseExecutableCommand {
 
     @OptionGroup var device: DeviceOptions
 
+    @Option(
+        name: .customLong("bundle-id"),
+        help: "Physical Apple device only: attach the WebDriverAgent session to this app and bring it to the foreground, so the swipe targets that app instead of the home screen. Ignored on the iOS Simulator and Android."
+    )
+    var bundleId: String?
+
     @OptionGroup var json: JSONOutputOptions
 
     var jsonOutput: Bool { json.enabled }
@@ -107,7 +113,8 @@ struct Swipe: SimUseExecutableCommand {
             udid: device.resolved,
             from: (x: coords.startX, y: coords.startY),
             to: (x: coords.endX, y: coords.endY),
-            durationMs: durationMs
+            durationMs: durationMs,
+            bundleId: bundleId
         )
         return ExecutionResult(coordinates: coords)
     }

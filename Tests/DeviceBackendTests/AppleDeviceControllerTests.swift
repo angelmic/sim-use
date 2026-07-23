@@ -112,6 +112,20 @@ final class AppleDeviceControllerTests: XCTestCase {
         XCTAssertEqual(actions.actions.first?.actions.first?.y, 98)
     }
 
+    func testTapForwardsBundleIdToSessionCaps() async throws {
+        let (controller, transport) = makeController(
+            [statusOK(), sessionResponse(), emptyOK(), emptyOK()],
+            device: iPhone()
+        )
+        _ = try await controller.tap(udid: iPhoneUDID, target: .point(x: 1, y: 2), bundleId: "com.example.app")
+        let requests = await transport.recordedRequests()
+        // Session POST is index 1 (index 0 is the preflight GET /status).
+        let caps = try JSONDecoder().decode(SessionCapsProbe.self, from: try XCTUnwrap(requests[1].body))
+        XCTAssertEqual(caps.capabilities.alwaysMatch.bundleId, "com.example.app")
+        XCTAssertEqual(caps.capabilities.alwaysMatch.autoLaunch, true)
+        XCTAssertEqual(caps.capabilities.alwaysMatch.noReset, true)
+    }
+
     // MARK: - swipe
 
     func testSwipeSendsMoveDownMoveUp() async throws {
@@ -240,6 +254,23 @@ final class AppleDeviceControllerTests: XCTestCase {
             let button: Int?
         }
         let actions: [Source]
+    }
+
+    private struct SessionCapsProbe: Decodable {
+        struct Caps: Decodable {
+            struct AlwaysMatch: Decodable {
+                let bundleId: String?
+                let autoLaunch: Bool?
+                let noReset: Bool?
+                enum CodingKeys: String, CodingKey {
+                    case bundleId = "appium:bundleId"
+                    case autoLaunch = "appium:autoLaunch"
+                    case noReset = "appium:noReset"
+                }
+            }
+            let alwaysMatch: AlwaysMatch
+        }
+        let capabilities: Caps
     }
 
     private struct SendKeysProbe: Decodable { let text: String }

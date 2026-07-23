@@ -57,6 +57,12 @@ struct Type: SimUseExecutableCommand {
 
     @OptionGroup var device: DeviceOptions
 
+    @Option(
+        name: .customLong("bundle-id"),
+        help: "Physical Apple device only: attach the WebDriverAgent session to this app and bring it to the foreground, so the text goes into that app's field instead of the home screen. Ignored on the iOS Simulator and Android."
+    )
+    var bundleId: String?
+
     @OptionGroup var json: JSONOutputOptions
 
     var jsonOutput: Bool { json.enabled }
@@ -98,7 +104,7 @@ struct Type: SimUseExecutableCommand {
     /// WebDriverAgent. tvOS is rejected by the controller with
     /// `TVOSCapabilityError` (use `sim-use tvos type`).
     private func executeAppleDevice() async throws -> ExecutionResult {
-        try await AppleDeviceController.live().type(udid: device.resolved, text: try resolvedInputText())
+        try await AppleDeviceController.live().type(udid: device.resolved, text: try resolvedInputText(), bundleId: bundleId)
         return ExecutionResult()
     }
 
