@@ -85,6 +85,8 @@ struct KeyboardState: SimUseExecutableCommand {
             )
         case .tvOSSim:
             throw TVOSCapabilityError(command: "keyboard-state")
+        case .appleDevice:
+            throw DeviceBackendUnsupportedError(command: "keyboard-state", deviceId: device.resolved)
         case .iOSSim, .none:
             let sub = makeIOSSubcommand()
             return try await sub.execute()

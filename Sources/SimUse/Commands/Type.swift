@@ -86,6 +86,8 @@ struct Type: SimUseExecutableCommand {
             return try executeAndroid()
         case .tvOSSim:
             throw TVOSCapabilityError(command: "type")
+        case .appleDevice:
+            throw DeviceBackendUnsupportedError(command: "type", deviceId: device.resolved)
         case .iOSSim, .none:
             return try await executeIOSSim()
         }

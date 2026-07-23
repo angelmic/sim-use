@@ -109,6 +109,8 @@ struct LongPress: SimUseExecutableCommand {
             return try executeAndroid()
         case .tvOSSim:
             throw TVOSCapabilityError(command: "long-press")
+        case .appleDevice:
+            throw DeviceBackendUnsupportedError(command: "long-press", deviceId: device.resolved)
         case .iOSSim, .none:
             return try await executeIOSSim()
         }

@@ -154,6 +154,8 @@ struct Paste: SimUseExecutableCommand {
             return try executeAndroid()
         case .tvOSSim:
             throw TVOSCapabilityError(command: "paste")
+        case .appleDevice:
+            throw DeviceBackendUnsupportedError(command: "paste", deviceId: device.resolved)
         case .iOSSim, .none:
             return try await executeIOSSim()
         }

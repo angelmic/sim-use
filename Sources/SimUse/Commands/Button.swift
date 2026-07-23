@@ -68,6 +68,8 @@ struct Button: SimUseExecutableCommand {
             return try executeAndroid()
         case .tvOSSim:
             throw TVOSCapabilityError(command: "button")
+        case .appleDevice:
+            throw DeviceBackendUnsupportedError(command: "button", deviceId: device.resolved)
         case .iOSSim, .none:
             return try await executeIOSSim()
         }

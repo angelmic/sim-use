@@ -73,6 +73,9 @@ struct AppState: SimUseExecutableCommand {
     func execute() async throws -> ExecutionResult {
         let udid = device.resolved
         let platform = PlatformRouter.resolve(udid: udid)
+        if platform == .appleDevice {
+            throw DeviceBackendUnsupportedError(command: "app-state", deviceId: udid)
+        }
         let isAndroid = platform == .android
         let probed = isAndroid
             ? AndroidProcessLister.appSnapshot(serial: udid)
@@ -110,6 +113,9 @@ struct AppState: SimUseExecutableCommand {
         switch platform {
         case .android: return "android"
         case .tvOSSim: return "tvos"
+        // Physical devices are rejected in execute() before this label is
+        // built; the case exists only for switch exhaustiveness.
+        case .appleDevice: return "ios"
         case .iOSSim, .none: return "ios"
         }
     }

@@ -81,6 +81,8 @@ struct Swipe: SimUseExecutableCommand {
             return try await executeAndroid()
         case .tvOSSim:
             throw TVOSCapabilityError(command: "swipe")
+        case .appleDevice:
+            throw DeviceBackendUnsupportedError(command: "swipe", deviceId: device.resolved)
         case .iOSSim, .none:
             return try await executeIOSSim()
         }
