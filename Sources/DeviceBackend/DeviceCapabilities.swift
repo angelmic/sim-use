@@ -11,8 +11,12 @@ public struct DeviceCapabilityConfig: Sendable, Equatable {
     /// iOS preinstalled WDA product id, **without** the `.xctrunner`
     /// suffix — the XCUITest driver appends it when launching.
     public var iosWDABundleId: String
-    /// Local port the driver forwards to on-device WDA (`appium:wdaLocalPort`).
-    public var iosWDALocalPort: Int
+    /// Mac-side port the driver binds to proxy on-device WDA
+    /// (`appium:wdaLocalPort`), for both iOS and tvOS. Explicit rather than
+    /// left to the driver's default 8100 so a second task-owned server can
+    /// dodge a port already held by another Appium (P0-C2's "change
+    /// wdaLocalPort to bypass" recovery).
+    public var wdaLocalPort: Int
     /// tvOS xcodebuild-flow WDA product id (again suffix-free).
     public var tvosWDABundleId: String
     /// Team id and signing identity for the tvOS xcodebuild WDA build.
@@ -28,7 +32,7 @@ public struct DeviceCapabilityConfig: Sendable, Equatable {
 
     public init(
         iosWDABundleId: String = "com.catchplay.WebDriverAgentRunner",
-        iosWDALocalPort: Int = 8100,
+        wdaLocalPort: Int = 8100,
         tvosWDABundleId: String = "com.catchplay.wda",
         xcodeOrgId: String = "MKK9DM2XD9",
         xcodeSigningId: String = "Apple Development",
@@ -36,7 +40,7 @@ public struct DeviceCapabilityConfig: Sendable, Equatable {
         newCommandTimeout: Int = 120
     ) {
         self.iosWDABundleId = iosWDABundleId
-        self.iosWDALocalPort = iosWDALocalPort
+        self.wdaLocalPort = wdaLocalPort
         self.tvosWDABundleId = tvosWDABundleId
         self.xcodeOrgId = xcodeOrgId
         self.xcodeSigningId = xcodeSigningId
@@ -49,7 +53,7 @@ public struct DeviceCapabilityConfig: Sendable, Equatable {
     ) -> DeviceCapabilityConfig {
         var config = DeviceCapabilityConfig()
         if let value = environment["SIM_USE_WDA_BUNDLE_ID"]?.nonBlank { config.iosWDABundleId = value }
-        if let value = environment["SIM_USE_WDA_LOCAL_PORT"].flatMap({ Int($0) }) { config.iosWDALocalPort = value }
+        if let value = environment["SIM_USE_WDA_LOCAL_PORT"].flatMap({ Int($0) }) { config.wdaLocalPort = value }
         if let value = environment["SIM_USE_TVOS_WDA_BUNDLE_ID"]?.nonBlank { config.tvosWDABundleId = value }
         if let value = environment["SIM_USE_XCODE_ORG_ID"]?.nonBlank { config.xcodeOrgId = value }
         if let value = environment["SIM_USE_XCODE_SIGNING_ID"]?.nonBlank { config.xcodeSigningId = value }
@@ -97,6 +101,10 @@ public enum DeviceCapabilityBuilder {
             return caps
         }
 
+        // Both modern families proxy WDA over a Mac-side port; set it
+        // explicitly so a second task-owned server can avoid a port an
+        // existing Appium already holds.
+        caps.wdaLocalPort = config.wdaLocalPort
         switch info.family {
         case .tvos:
             caps.updatedWDABundleId = config.tvosWDABundleId
@@ -107,7 +115,6 @@ public enum DeviceCapabilityBuilder {
             // the iOS preinstalled-WDA path is the default modern branch.
             caps.usePreinstalledWDA = true
             caps.updatedWDABundleId = config.iosWDABundleId
-            caps.wdaLocalPort = config.iosWDALocalPort
         }
         return caps
     }
