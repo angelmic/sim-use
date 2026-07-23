@@ -115,6 +115,12 @@ struct Paste: SimUseExecutableCommand {
 
     @OptionGroup var device: DeviceOptions
 
+    @Option(
+        name: .customLong("bundle-id"),
+        help: "Physical Apple device only: attach the WebDriverAgent session to this app and bring it to the foreground, so the paste goes into that app's field instead of the home screen. Ignored on the iOS Simulator and Android."
+    )
+    var bundleId: String?
+
     @OptionGroup var json: JSONOutputOptions
 
     var jsonOutput: Bool { json.enabled }
@@ -176,7 +182,7 @@ struct Paste: SimUseExecutableCommand {
         guard !inputText.isEmpty else {
             throw CLIError(errorDescription: "Input text is empty; nothing to paste.")
         }
-        try await AppleDeviceController.live().paste(udid: device.resolved, text: inputText)
+        try await AppleDeviceController.live().paste(udid: device.resolved, text: inputText, bundleId: bundleId)
         return ExecutionResult()
     }
 

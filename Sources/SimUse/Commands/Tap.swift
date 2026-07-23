@@ -87,6 +87,12 @@ struct Tap: SimUseExecutableCommand {
 
     @OptionGroup var device: DeviceOptions
 
+    @Option(
+        name: .customLong("bundle-id"),
+        help: "Physical Apple device only: attach the WebDriverAgent session to this app and bring it to the foreground, so the tap targets that app instead of the home screen. Ignored on the iOS Simulator and Android."
+    )
+    var bundleId: String?
+
     @OptionGroup var json: JSONOutputOptions
 
     var jsonOutput: Bool { json.enabled }
@@ -161,6 +167,7 @@ struct Tap: SimUseExecutableCommand {
         let point = try await AppleDeviceController.live().tap(
             udid: device.resolved,
             target: try makeDeviceTapTarget(),
+            bundleId: bundleId,
             holdMs: holdMs
         )
         return ExecutionResult(x: point.x, y: point.y)

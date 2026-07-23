@@ -89,11 +89,20 @@ public enum DeviceCapabilityBuilder {
         config: DeviceCapabilityConfig
     ) throws -> AppiumCapabilities {
         let platformName = info.family == .tvos ? "tvOS" : "iOS"
+        // A bundle id makes the session attach to (and foreground) that app;
+        // with none, it attaches to whatever is foreground. `autoLaunch`
+        // gates that foregrounding on a bundle being present, and `noReset`
+        // keeps the app's state across the one-session-per-command model so
+        // a `tap` that navigated into a screen isn't reset by the next
+        // `type`'s session — the mechanism the tvOS Simulator path proved.
+        let resolvedBundleId = bundleId?.nonBlank
         var caps = AppiumCapabilities(
             platformName: platformName,
             automationName: "XCUITest",
             udid: info.udid,
-            bundleId: bundleId?.nonBlank,
+            bundleId: resolvedBundleId,
+            autoLaunch: resolvedBundleId != nil,
+            noReset: true,
             newCommandTimeout: config.newCommandTimeout
         )
 
