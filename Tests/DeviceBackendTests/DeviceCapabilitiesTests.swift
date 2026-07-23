@@ -33,6 +33,9 @@ final class DeviceCapabilitiesTests: XCTestCase {
         XCTAssertEqual(wire["appium:noReset"] as? Bool, true)
         XCTAssertEqual(wire["appium:autoLaunch"] as? Bool, false)
         XCTAssertNil(wire["appium:bundleId"])
+        // No target app ⇒ no launch/terminate overrides (driver default).
+        XCTAssertNil(wire["appium:forceAppLaunch"])
+        XCTAssertNil(wire["appium:shouldTerminateApp"])
         // The device path must not leak the tvOS xcodebuild or classic keys.
         XCTAssertNil(wire["appium:xcodeOrgId"])
         XCTAssertNil(wire["appium:webDriverAgentUrl"])
@@ -56,6 +59,8 @@ final class DeviceCapabilitiesTests: XCTestCase {
         // A bundle id foregrounds that app and keeps its state across sessions.
         XCTAssertEqual(wire["appium:autoLaunch"] as? Bool, true)
         XCTAssertEqual(wire["appium:noReset"] as? Bool, true)
+        XCTAssertEqual(wire["appium:forceAppLaunch"] as? Bool, false)
+        XCTAssertEqual(wire["appium:shouldTerminateApp"] as? Bool, false)
         // wdaLocalPort applies to tvOS too, so a second task-owned server can
         // dodge a port another Appium already holds (P0-C2 recovery).
         XCTAssertEqual(wire["appium:wdaLocalPort"] as? Int, 8100)

@@ -124,6 +124,7 @@ final class AppleDeviceControllerTests: XCTestCase {
         XCTAssertEqual(caps.capabilities.alwaysMatch.bundleId, "com.example.app")
         XCTAssertEqual(caps.capabilities.alwaysMatch.autoLaunch, true)
         XCTAssertEqual(caps.capabilities.alwaysMatch.noReset, true)
+        XCTAssertEqual(caps.capabilities.alwaysMatch.forceAppLaunch, false)
     }
 
     // MARK: - swipe
@@ -262,10 +263,12 @@ final class AppleDeviceControllerTests: XCTestCase {
                 let bundleId: String?
                 let autoLaunch: Bool?
                 let noReset: Bool?
+                let forceAppLaunch: Bool?
                 enum CodingKeys: String, CodingKey {
                     case bundleId = "appium:bundleId"
                     case autoLaunch = "appium:autoLaunch"
                     case noReset = "appium:noReset"
+                    case forceAppLaunch = "appium:forceAppLaunch"
                 }
             }
             let alwaysMatch: AlwaysMatch
