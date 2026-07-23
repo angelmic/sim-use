@@ -96,20 +96,23 @@ public enum DeviceCapabilityBuilder {
         // a `tap` that navigated into a screen isn't reset by the next
         // `type`'s session — the mechanism the tvOS Simulator path proved.
         let resolvedBundleId = bundleId?.nonBlank
-        // When targeting an app, activate it without cold-relaunching
-        // (forceAppLaunch: false) and leave it running at session end
-        // (shouldTerminateApp: false), so navigation done by one command
-        // survives into the next. Off (nil) when there's no target app.
+        // Activate semantics, not launch: keep autoLaunch off and let the
+        // controller `mobile: activateApp` the bundle after the session opens.
+        // `autoLaunch: true` cold-launches a real app back to its root screen
+        // every session (there's no launch-arg to jump screens), losing
+        // navigation across the one-session-per-command model; activate
+        // foregrounds the already-running app at its current screen (P0-C
+        // verified). `shouldTerminateApp: false` leaves it running at session
+        // end so the next command can re-foreground it there.
         let targetsApp = resolvedBundleId != nil
         var caps = AppiumCapabilities(
             platformName: platformName,
             automationName: "XCUITest",
             udid: info.udid,
             bundleId: resolvedBundleId,
-            autoLaunch: targetsApp,
+            autoLaunch: targetsApp ? false : nil,
             noReset: true,
             newCommandTimeout: config.newCommandTimeout,
-            forceAppLaunch: targetsApp ? false : nil,
             shouldTerminateApp: targetsApp ? false : nil
         )
 

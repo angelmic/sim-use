@@ -14,13 +14,10 @@ public struct AppiumCapabilities: Sendable, Encodable {
     public var usePreinstalledWDA: Bool?
     public var updatedWDABundleId: String?
     public var webDriverAgentUrl: String?
-    /// Preserve the app-under-test's state across the one-session-per-command
-    /// model. `forceAppLaunch: false` activates (foregrounds) an already-
-    /// running app instead of cold-relaunching it to its first screen, and
-    /// `shouldTerminateApp: false` leaves it running when the session ends —
-    /// so a `tap` that navigated into a screen is still there for the next
-    /// command's `type`. Both stay nil (driver default) off the device path.
-    public var forceAppLaunch: Bool?
+    /// Leave the app-under-test running when the session ends, so the next
+    /// command's session can re-foreground it (via `mobile: activateApp`) at
+    /// the screen a previous command navigated to rather than a cold start.
+    /// Nil (driver default) off the device path.
     public var shouldTerminateApp: Bool?
     /// Apple Developer Team id for the xcodebuild WDA flow. Physical tvOS
     /// 17+/26 has no `usePreinstalledWDA` path: Appium builds and launches
@@ -43,7 +40,6 @@ public struct AppiumCapabilities: Sendable, Encodable {
         usePreinstalledWDA: Bool? = nil,
         updatedWDABundleId: String? = nil,
         webDriverAgentUrl: String? = nil,
-        forceAppLaunch: Bool? = nil,
         shouldTerminateApp: Bool? = nil,
         xcodeOrgId: String? = nil,
         xcodeSigningId: String? = nil
@@ -60,7 +56,6 @@ public struct AppiumCapabilities: Sendable, Encodable {
         self.usePreinstalledWDA = usePreinstalledWDA
         self.updatedWDABundleId = updatedWDABundleId
         self.webDriverAgentUrl = webDriverAgentUrl
-        self.forceAppLaunch = forceAppLaunch
         self.shouldTerminateApp = shouldTerminateApp
         self.xcodeOrgId = xcodeOrgId
         self.xcodeSigningId = xcodeSigningId
@@ -79,7 +74,6 @@ public struct AppiumCapabilities: Sendable, Encodable {
         case usePreinstalledWDA = "appium:usePreinstalledWDA"
         case updatedWDABundleId = "appium:updatedWDABundleId"
         case webDriverAgentUrl = "appium:webDriverAgentUrl"
-        case forceAppLaunch = "appium:forceAppLaunch"
         case shouldTerminateApp = "appium:shouldTerminateApp"
         case xcodeOrgId = "appium:xcodeOrgId"
         case xcodeSigningId = "appium:xcodeSigningId"
@@ -103,7 +97,6 @@ public struct AppiumCapabilities: Sendable, Encodable {
         try container.encodeIfPresent(usePreinstalledWDA, forKey: .usePreinstalledWDA)
         try container.encodeIfPresent(updatedWDABundleId, forKey: .updatedWDABundleId)
         try container.encodeIfPresent(webDriverAgentUrl, forKey: .webDriverAgentUrl)
-        try container.encodeIfPresent(forceAppLaunch, forKey: .forceAppLaunch)
         try container.encodeIfPresent(shouldTerminateApp, forKey: .shouldTerminateApp)
         try container.encodeIfPresent(xcodeOrgId, forKey: .xcodeOrgId)
         try container.encodeIfPresent(xcodeSigningId, forKey: .xcodeSigningId)
