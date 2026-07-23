@@ -47,8 +47,19 @@ public struct TVOSRemoteCommand: SimUseExecutableCommand {
     }
 
     public func execute() async throws -> TVOSRemoteResult {
-        let controller = try TVOSController.live()
-        return try await controller.pressRemote(
+        // A physical Apple TV needs the device preflight + xcodebuild-flow
+        // caps and has no HID fast path; the Simulator keeps its existing
+        // controller. Routing by UDID shape mirrors the top-level verbs.
+        if PlatformRouter.looksLikeAppleDevice(device.resolved) {
+            return try await TVOSDeviceController.live().pressRemote(
+                button,
+                udid: device.resolved,
+                bundleId: target.bundleId,
+                settleDelay: settleDelay,
+                reportFocus: reportFocus
+            )
+        }
+        return try await TVOSController.live().pressRemote(
             button,
             udid: device.resolved,
             bundleId: target.bundleId,
