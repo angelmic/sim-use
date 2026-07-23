@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import AppiumCore
 import Foundation
 import SimUseCore
 
@@ -52,14 +53,20 @@ public struct TVOSRemoteResult: Codable, Equatable, Sendable {
 /// Every operation owns exactly one Appium session so failures cannot leave a
 /// device claimed and block the next agent action.
 public struct TVOSController: Sendable {
-    private let client: TVOSAppiumClient
+    private let client: AppiumClient
+    private let defaultBundleId: String?
 
-    public init(client: TVOSAppiumClient) {
+    public init(client: AppiumClient, defaultBundleId: String? = nil) {
         self.client = client
+        self.defaultBundleId = TVOSController.normalized(bundleId: defaultBundleId)
     }
 
     public static func live() throws -> TVOSController {
-        TVOSController(client: try .live())
+        let environment = ProcessInfo.processInfo.environment
+        return TVOSController(
+            client: try .live(environment: environment),
+            defaultBundleId: environment["SIM_USE_TVOS_BUNDLE_ID"]
+        )
     }
 
     public func describeUI(
@@ -67,7 +74,7 @@ public struct TVOSController: Sendable {
         includeRaw: Bool,
         bundleId: String? = nil
     ) async throws -> DescribeUIResult {
-        try await client.withSession(udid: udid, bundleId: bundleId) { session in
+        try await client.withSession(capabilities: makeCapabilities(udid: udid, bundleId: bundleId)) { session in
             let source = try await session.source()
             return try TVOSOutlineRenderer.render(source: source, includeRaw: includeRaw)
         }
@@ -94,7 +101,7 @@ public struct TVOSController: Sendable {
             return TVOSRemoteResult(button: button, before: nil, after: nil)
         }
 
-        return try await client.withSession(udid: udid, bundleId: bundleId) { session in
+        return try await client.withSession(capabilities: makeCapabilities(udid: udid, bundleId: bundleId)) { session in
             let beforeSource = try await session.source()
             let before = try TVOSOutlineRenderer
                 .render(source: beforeSource, includeRaw: false)
@@ -114,7 +121,7 @@ public struct TVOSController: Sendable {
     }
 
     public func screenshot(udid: String, bundleId: String? = nil) async throws -> Data {
-        try await client.withSession(udid: udid, bundleId: bundleId) { session in
+        try await client.withSession(capabilities: makeCapabilities(udid: udid, bundleId: bundleId)) { session in
             try await session.screenshot()
         }
     }
@@ -130,7 +137,7 @@ public struct TVOSController: Sendable {
         udid: String,
         bundleId: String? = nil
     ) async throws -> TVOSTypeResult {
-        try await client.withSession(udid: udid, bundleId: bundleId) { session in
+        try await client.withSession(capabilities: makeCapabilities(udid: udid, bundleId: bundleId)) { session in
             let before = try TVOSOutlineRenderer.render(
                 source: try await session.source(),
                 includeRaw: false
@@ -155,6 +162,38 @@ public struct TVOSController: Sendable {
 
     /// Roles whose `select` opens the system keyboard.
     private static let textEntryRoles: Set<String> = ["TextField", "SecureTextField", "SearchField", "TextView"]
+
+    /// The tvOS Simulator capability assembly Appium's XCUITest driver
+    /// expects. A per-call `bundleId` wins over the client's default; with
+    /// neither, the session attaches to the foreground app (`autoLaunch`
+    /// off). This is the wire format TVOSBackend has always sent — it just
+    /// lives here now instead of inside the client.
+    private func makeCapabilities(udid: String, bundleId: String?) -> AppiumCapabilities {
+        let resolvedBundleId = TVOSController.normalized(bundleId: bundleId) ?? defaultBundleId
+        return AppiumCapabilities(
+            platformName: "tvOS",
+            automationName: "XCUITest",
+            udid: udid,
+            bundleId: resolvedBundleId,
+            autoLaunch: resolvedBundleId != nil,
+            noReset: true,
+            useNewWDA: false,
+            newCommandTimeout: 300
+        )
+    }
+
+    private static func normalized(bundleId: String?) -> String? {
+        let value = bundleId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value?.isEmpty == false ? value : nil
+    }
+}
+
+/// A tvOS remote press is Appium's `mobile: pressButton` — the platform
+/// semantic that keeps AppiumCore's `execute` primitive generic.
+private extension AppiumSession {
+    func pressRemote(_ button: TVOSRemoteButton) async throws {
+        try await execute(script: "mobile: pressButton", args: [["name": button.appiumName]])
+    }
 }
 
 public struct TVOSTypeResult: Codable, Equatable, Sendable {

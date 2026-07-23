@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 @testable import TVOSBackend
+import AppiumCore
 import Foundation
 import SimUseCore
 import XCTest
@@ -107,7 +108,7 @@ final class TVOSControllerTests: XCTestCase {
         do {
             _ = try await controller.describeUI(udid: tvosUDID, includeRaw: false)
             XCTFail("Expected an invalid-response error")
-        } catch let error as TVOSAppiumError {
+        } catch let error as AppiumError {
             guard case .invalidResponse = error else {
                 return XCTFail("Expected .invalidResponse, got \(error)")
             }
@@ -317,7 +318,7 @@ final class TVOSControllerTests: XCTestCase {
     private let tvosUDID = "8737CB71-6462-41EC-B13E-E7C5E8F033E9"
 
     private func makeController(transport: MockTransport) -> TVOSController {
-        TVOSController(client: TVOSAppiumClient(
+        TVOSController(client: AppiumClient(
             baseURL: URL(string: "http://127.0.0.1:4723")!,
             transport: transport
         ))
@@ -332,20 +333,20 @@ private actor KeyRecorder {
     }
 }
 
-private actor MockTransport: TVOSAppiumTransport {
-    private var responses: [Result<TVOSAppiumResponse, Error>]
-    private var requests: [TVOSAppiumRequest] = []
+private actor MockTransport: AppiumTransport {
+    private var responses: [Result<AppiumResponse, Error>]
+    private var requests: [AppiumRequest] = []
 
-    init(responses: [Result<TVOSAppiumResponse, Error>]) {
+    init(responses: [Result<AppiumResponse, Error>]) {
         self.responses = responses
     }
 
-    func send(_ request: TVOSAppiumRequest) async throws -> TVOSAppiumResponse {
+    func send(_ request: AppiumRequest) async throws -> AppiumResponse {
         requests.append(request)
         return try responses.removeFirst().get()
     }
 
-    func recordedRequests() -> [TVOSAppiumRequest] {
+    func recordedRequests() -> [AppiumRequest] {
         requests
     }
 }
@@ -391,19 +392,19 @@ private struct ExecuteRequest: Decodable {
     let args: [Argument]
 }
 
-private func response<Value: Encodable>(value: Value) -> Result<TVOSAppiumResponse, Error> {
+private func response<Value: Encodable>(value: Value) -> Result<AppiumResponse, Error> {
     let body = try! JSONEncoder().encode(ValueEnvelope(value: value))
-    return .success(TVOSAppiumResponse(statusCode: 200, body: body))
+    return .success(AppiumResponse(statusCode: 200, body: body))
 }
 
 private func webdriverError(
     statusCode: Int,
     message: String
-) -> Result<TVOSAppiumResponse, Error> {
+) -> Result<AppiumResponse, Error> {
     let body = """
     {"value":{"error":"unknown error","message":"\(message)"}}
     """
-    return .success(TVOSAppiumResponse(statusCode: statusCode, body: Data(body.utf8)))
+    return .success(AppiumResponse(statusCode: statusCode, body: Data(body.utf8)))
 }
 
 private func textFieldSource(keyboardOpen: Bool = false) -> String {
