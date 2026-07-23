@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **DeviceBackend — physical Apple device support (xd 2.0 Phase 1)**: drive real
+  iPhones/Apple TVs through Appium/WDA with the same CLI verbs as simulators.
+  - `devices` lists physical devices (dash + 40-hex UDIDs) with a `target: sim|device` field.
+  - iOS device verbs: `ui`/`tap`/`swipe`/`type`/`paste`/`screenshot` (`--bundle-id`
+    attaches with activate semantics — navigation survives across per-command sessions).
+  - tvOS device verbs: `tvos ui`/`remote`/`screenshot` on tvOS 17+; `ui` fails fast
+    on ≤16.x (WDA a11y crash). Known gap: device `paste` does not land in the field yet.
+  - Fail-fast preflight: Appium `/status` (3s) and `devicectl` tunnelState checks with
+    actionable hints; requires a reachable Appium server (`SIM_USE_APPIUM_URL`,
+    silently defaults to `http://127.0.0.1:4723`).
+  - App-agnostic capability defaults (`SIM_USE_WDA_BUNDLE_ID`, `SIM_USE_TVOS_WDA_BUNDLE_ID`,
+    `SIM_USE_XCODE_ORG_ID`); team/app-specific values are injected via env only.
+  - New `scripts/test-runner-ios-device.sh` (requires-device; SKIPs cleanly when absent).
+
 - Experimental tvOS Simulator support through Appium/XCUITest: top-level `ui` and `screenshot`, the `sim-use tvos` namespace, and focus-aware `tvos remote <up|down|left|right|select|menu|play-pause|home>`. Each operation owns and closes a short-lived WebDriver session; `--bundle-id` (or `SIM_USE_TVOS_BUNDLE_ID` for top-level verbs) restores the target app after a cold WDA launch, and `SIM_USE_APPIUM_URL` overrides the default `http://127.0.0.1:4723` endpoint. `tvos type <text>` enters whole strings into the focused text field through the focus keyboard (WebDriver element sendKeys — the only string-entry channel tvOS exposes; the tvOS WebDriverAgent has no keyboardInput or W3C key actions).
 - tvOS Playground fixture (`Playgrounds/tvOS`, `com.cameroncooke.SimUsePlaygroundTV`): a root menu with `--launch-arg screen=` deep links to four deterministic screens — a 3x2 focus grid (default focus pinned on Alpha, `Last:` status line, play-pause handler), a focus-behaviors row (a disabled control, an alert), a text-entry field, and a 25-row list. The TVOSRemoteTests E2E suite covers the interactions tvOS actually has: focus movement along the grid contract and select activation, focus stopping at edges and skipping disabled controls, alerts trapping focus, Menu popping back / dismissing the keyboard, Home leaving the app, play-pause reaching the app, the focus keyboard typing a character, `tvos type` entering whole strings (and refusing when focus is not on a text field), long lists scrolling the focused row into view, the shared `ui`/`screenshot`/`app-state` surface, and a parameterized sweep asserting every coordinate/HID verb fails with the focus-navigation hint. Gated by `SIM_USE_E2E=1` + `TVOS_SIMULATOR_UDID`; `make e2e-tvos` (or `scripts/test-runner-tvos.sh [test-name] [--no-build]`) builds/installs the fixture, preflights Appium, and runs the suite. Not part of `make e2e` while tvOS support is experimental.
 
