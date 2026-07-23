@@ -51,3 +51,66 @@ struct DevicesTVOSFilterTests {
         runtime: "Android"
     )
 }
+
+/// `sim-use devices` must list physical devices alongside Simulators, keep
+/// the sim-vs-device `target` intact through filtering, and (without --all)
+/// hide devices that aren't reachable right now.
+@Suite("Devices physical-device filtering")
+struct DevicesPhysicalDeviceFilterTests {
+    @Test("--platform ios includes a connected physical iPhone and its device target")
+    func iosIncludesPhysical() {
+        let result = Devices.filterDevices(
+            appleDevices: [iosSim, connectedIPhone, connectedAppleTV],
+            androidDevices: [],
+            platform: .ios,
+            includeAll: false
+        )
+        #expect(result.contains(connectedIPhone))
+        #expect(!result.contains(connectedAppleTV))
+        #expect(result.first { $0.udid == connectedIPhone.udid }?.target == .device)
+    }
+
+    @Test("--platform tvos includes a physical Apple TV plus the tvOS sim")
+    func tvosIncludesPhysicalAndSim() {
+        let result = Devices.filterDevices(
+            appleDevices: [tvosSim, connectedIPhone, connectedAppleTV],
+            androidDevices: [],
+            platform: .tvos,
+            includeAll: false
+        )
+        #expect(Set(result) == [tvosSim, connectedAppleTV])
+    }
+
+    @Test("default (no --all) hides a disconnected physical device")
+    func defaultHidesDisconnected() {
+        let result = Devices.filterDevices(
+            appleDevices: [connectedIPhone, disconnectedIPhone],
+            androidDevices: [],
+            platform: .ios,
+            includeAll: false
+        )
+        #expect(result == [connectedIPhone])
+    }
+
+    @Test("--all surfaces the disconnected physical device too")
+    func allIncludesDisconnected() {
+        let result = Devices.filterDevices(
+            appleDevices: [connectedIPhone, disconnectedIPhone],
+            androidDevices: [],
+            platform: .ios,
+            includeAll: true
+        )
+        #expect(Set(result) == [connectedIPhone, disconnectedIPhone])
+    }
+
+    private let iosSim = Device(udid: "ios-sim-1", name: "iPhone 17 Pro", platform: .ios,
+                                state: Device.State.iosBooted, runtime: "iOS 26.0", target: .sim)
+    private let tvosSim = Device(udid: "tvos-sim-1", name: "Apple TV 4K", platform: .tvos,
+                                 state: Device.State.iosBooted, runtime: "tvOS 18.2", target: .sim)
+    private let connectedIPhone = Device(udid: "00008140-00096D5C0CEA801C", name: "CP 16 Pro Max", platform: .ios,
+                                         state: Device.State.deviceConnected, runtime: "iOS 18.7.8", target: .device)
+    private let disconnectedIPhone = Device(udid: "00008130-001410193811401C", name: "Richard iPhone", platform: .ios,
+                                            state: "disconnected", runtime: "iOS 26.5.2", target: .device)
+    private let connectedAppleTV = Device(udid: "c311e5afe90ee702b80e8b64e1e12796e04e63a0", name: "辦公桌tv理查", platform: .tvos,
+                                          state: Device.State.deviceConnected, runtime: "tvOS 26.5", target: .device)
+}

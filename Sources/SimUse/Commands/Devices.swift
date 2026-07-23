@@ -129,18 +129,26 @@ struct Devices: SimUseExecutableCommand {
     }
 
     private func listIOS() async -> SideResult {
-        // If --platform=android, skip the simctl call entirely.
+        // If --platform=android, skip the Apple side entirely.
         if platform == .android { return SideResult(devices: [], failed: false) }
+        // Physical Apple devices (cabled iPhone/iPad, paired Apple TV) come
+        // from devicectl + idevice_id; Simulators from simctl. Merge both so
+        // `devices` shows the full Apple surface (each row carries its
+        // sim|device `target`). Physical enumeration is resilient — it never
+        // throws — so it can't take down the Simulator listing.
+        let physical = AppleDeviceLister.listPhysicalDevices()
         do {
             // We always fetch the full list (not `simctl ... booted`)
             // because the `--all` flag changes intent at runtime and
             // the cost of the wider query is small compared to the
             // process spawn itself.
-            let devices = try SimctlDeviceLister.listDevices(bootedOnly: false)
-            return SideResult(devices: devices, failed: false)
+            let sims = try SimctlDeviceLister.listDevices(bootedOnly: false)
+            return SideResult(devices: sims + physical, failed: false)
         } catch {
-            FileHandle.standardError.write(Data("warning: iOS device listing failed: \(error.localizedDescription)\n".utf8))
-            return SideResult(devices: [], failed: true)
+            FileHandle.standardError.write(Data("warning: iOS Simulator listing failed: \(error.localizedDescription)\n".utf8))
+            // simctl failed, but any physical devices we found are still
+            // worth surfacing; only report failure if we have nothing.
+            return SideResult(devices: physical, failed: physical.isEmpty)
         }
     }
 
@@ -170,9 +178,9 @@ struct Devices: SimUseExecutableCommand {
     /// Column-aligned text table. Computed widths so an emulator serial
     /// (~14 chars) doesn't waste space alongside an iOS UDID (36).
     private func renderTable(_ devices: [Device]) -> String {
-        let headers = ["PLATFORM", "STATE", "NAME", "UDID", "RUNTIME"]
+        let headers = ["PLATFORM", "TARGET", "STATE", "NAME", "UDID", "RUNTIME"]
         let rows: [[String]] = devices.map { d in
-            [d.platform.rawValue, d.state, d.name, d.udid, d.runtime ?? "-"]
+            [d.platform.rawValue, d.target.rawValue, d.state, d.name, d.udid, d.runtime ?? "-"]
         }
         let widths: [Int] = (0..<headers.count).map { col in
             ([headers[col]] + rows.map { $0[col] }).map(\.count).max() ?? 0
