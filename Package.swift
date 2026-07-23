@@ -59,6 +59,10 @@ let package = Package(
             name: "TVOSBackend",
             targets: ["TVOSBackend"]
         ),
+        .library(
+            name: "AppiumCore",
+            targets: ["AppiumCore"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0"),
@@ -112,9 +116,21 @@ let package = Package(
             ]
         ),
         .target(
+            name: "AppiumCore",
+            // The W3C WebDriver / Appium protocol layer, generalized out of
+            // TVOSBackend so iOS/tvOS device backends can share one client.
+            // Platform-specific capability assembly and command semantics
+            // (e.g. tvOS `mobile: pressButton`) live in the backends, not here.
+            dependencies: [
+                "SimUseCore",
+            ],
+            path: "Sources/AppiumCore"
+        ),
+        .target(
             name: "TVOSBackend",
             dependencies: [
                 "SimUseCore",
+                "AppiumCore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             path: "Sources/TVOSBackend"
@@ -175,6 +191,7 @@ let package = Package(
                 "SimUseCoreTests",
                 "AndroidBackendTests",
                 "TVOSBackendTests",
+                "AppiumCoreTests",
             ],
             resources: [
                 .copy("README.md"),
@@ -207,6 +224,11 @@ let package = Package(
             name: "TVOSBackendTests",
             dependencies: ["TVOSBackend", "SimUseCore"],
             path: "Tests/TVOSBackendTests"
+        ),
+        .testTarget(
+            name: "AppiumCoreTests",
+            dependencies: ["AppiumCore", "SimUseCore"],
+            path: "Tests/AppiumCoreTests"
         ),
         .plugin(
             name: "VersionPlugin",
