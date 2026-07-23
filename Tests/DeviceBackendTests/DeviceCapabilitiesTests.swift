@@ -46,6 +46,9 @@ final class DeviceCapabilitiesTests: XCTestCase {
         XCTAssertEqual(wire["appium:xcodeSigningId"] as? String, "Apple Development")
         XCTAssertEqual(wire["appium:updatedWDABundleId"] as? String, "com.catchplay.wda")
         XCTAssertEqual(wire["appium:bundleId"] as? String, "com.catchplay.tvos")
+        // wdaLocalPort applies to tvOS too, so a second task-owned server can
+        // dodge a port another Appium already holds (P0-C2 recovery).
+        XCTAssertEqual(wire["appium:wdaLocalPort"] as? Int, 8100)
         // No preinstalled path on tvOS: usePreinstalledWDA must be absent.
         XCTAssertNil(wire["appium:usePreinstalledWDA"])
         XCTAssertNil(wire["appium:webDriverAgentUrl"])
@@ -101,7 +104,7 @@ final class DeviceCapabilitiesTests: XCTestCase {
             "SIM_USE_WDA_URL": "http://127.0.0.1:9",
         ])
         XCTAssertEqual(cfg.iosWDABundleId, "com.acme.WDA")
-        XCTAssertEqual(cfg.iosWDALocalPort, 8199)
+        XCTAssertEqual(cfg.wdaLocalPort, 8199)
         XCTAssertEqual(cfg.tvosWDABundleId, "com.acme.tvwda")
         XCTAssertEqual(cfg.xcodeOrgId, "TEAM123456")
         XCTAssertEqual(cfg.xcodeSigningId, "iPhone Developer")
