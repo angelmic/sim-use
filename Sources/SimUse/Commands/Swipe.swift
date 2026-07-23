@@ -4,6 +4,7 @@ import Foundation
 import SimUseCore
 import AndroidBackend
 import iOSSimBackend
+import DeviceBackend
 
 /// Top-level cross-platform `swipe` verb. Owns the verb-specific flag
 /// surface, resolves the target platform via `PlatformRouter`, then
@@ -45,10 +46,10 @@ struct Swipe: SimUseExecutableCommand {
 
     var simulatorUDIDForDaemon: String? { device.resolved }
 
-    /// tvOS never serves this verb (`execute()` throws
-    /// `TVOSCapabilityError`), so reject in-process instead of spawning a
-    /// per-UDID daemon for a device the daemon cannot drive.
-    var daemonBypass: Bool { PlatformRouter.resolve(udid: device.resolved) == .tvOSSim }
+    /// The FBSimulator daemon drives only iOS Simulators; tvOS and physical
+    /// Apple devices run through Appium, so reject/route in-process instead
+    /// of spawning a per-UDID daemon for a target it cannot drive.
+    var daemonBypass: Bool { PlatformRouter.bypassesSimulatorDaemon(udid: device.resolved) }
 
     /// Mirror `Tap` / `Button`'s "✓ … completed successfully" line.
     /// Without this the cross-platform `sim-use swipe` is silent on
@@ -82,7 +83,7 @@ struct Swipe: SimUseExecutableCommand {
         case .tvOSSim:
             throw TVOSCapabilityError(command: "swipe")
         case .appleDevice:
-            throw DeviceBackendUnsupportedError(command: "swipe", deviceId: device.resolved)
+            return try await executeAppleDevice()
         case .iOSSim, .none:
             return try await executeIOSSim()
         }
@@ -91,6 +92,21 @@ struct Swipe: SimUseExecutableCommand {
     private func executeIOSSim() async throws -> ExecutionResult {
         let sub = makeIOSSubcommand()
         return try await sub.execute()
+    }
+
+    /// Physical iOS device: a W3C pointer swipe from start to end over the
+    /// requested duration (300 ms when unspecified). tvOS is rejected by
+    /// the controller with `TVOSCapabilityError`.
+    private func executeAppleDevice() async throws -> ExecutionResult {
+        let coords = try resolvedCoordinates()
+        let durationMs = duration.map { Int(($0 * 1000).rounded()) } ?? 300
+        try await AppleDeviceController.live().swipe(
+            udid: device.resolved,
+            from: (x: coords.startX, y: coords.startY),
+            to: (x: coords.endX, y: coords.endY),
+            durationMs: durationMs
+        )
+        return ExecutionResult(coordinates: coords)
     }
 
     /// Construct the backend command and copy every parsed flag across.

@@ -5,6 +5,7 @@ import SimUseCore
 import AndroidBackend
 import iOSSimBackend
 import TVOSBackend
+import DeviceBackend
 
 /// Top-level cross-platform `screenshot` verb. Owns the flag surface
 /// and resolves the target platform, then delegates to the per-backend
@@ -65,7 +66,7 @@ struct Screenshot: SimUseExecutableCommand {
         case .iOSSimulator:
             return try await executeIOSSim()
         case .appleDevice:
-            throw DeviceBackendUnsupportedError(command: "screenshot", deviceId: device.resolved)
+            return try await executeAppleDevice()
         }
     }
 
@@ -119,16 +120,29 @@ struct Screenshot: SimUseExecutableCommand {
 
     private func executeAndroid() throws -> ExecutionResult {
         let png = try AndroidScreenshotCommand.performScreenshot(udid: device.resolved)
-        let path = resolveAndroidOutputPath(serial: device.resolved)
-        let url = URL(fileURLWithPath: path)
+        return try write(png, defaultLabel: "Android Screenshot", id: device.resolved)
+    }
+
+    /// Physical iOS/tvOS device: capture through the Appium session (the
+    /// caps assembler picks the right WDA path per family) and save the PNG.
+    private func executeAppleDevice() async throws -> ExecutionResult {
+        let png = try await AppleDeviceController.live().screenshot(udid: device.resolved)
+        return try write(png, defaultLabel: "Device Screenshot", id: device.resolved)
+    }
+
+    /// Resolve the output path, create the directory, and write the PNG —
+    /// shared by the Android and physical-device paths (the iOS Simulator
+    /// path owns its own FBSimulator-friendly naming).
+    private func write(_ png: Data, defaultLabel: String, id: String) throws -> ExecutionResult {
+        let url = URL(fileURLWithPath: resolveOutputPath(defaultLabel: defaultLabel, id: id))
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try png.write(to: url)
         return ExecutionResult(path: url.path)
     }
 
-    private func resolveAndroidOutputPath(serial: String) -> String {
+    private func resolveOutputPath(defaultLabel: String, id: String) -> String {
         let stamp = IOSSimScreenshotCommand.formatTimestamp(Date())
-        let defaultName = "Android Screenshot - \(serial) - \(stamp).png"
+        let defaultName = "\(defaultLabel) - \(id) - \(stamp).png"
         guard let provided = output?.trimmingCharacters(in: .whitespacesAndNewlines), !provided.isEmpty else {
             return FileManager.default.currentDirectoryPath + "/" + defaultName
         }

@@ -4,6 +4,7 @@ import Foundation
 import SimUseCore
 import AndroidBackend
 import iOSSimBackend
+import DeviceBackend
 
 /// Top-level cross-platform `paste` verb. Owns the flag surface and
 /// resolves the target platform, then delegates to the per-backend
@@ -124,10 +125,10 @@ struct Paste: SimUseExecutableCommand {
 
     var simulatorUDIDForDaemon: String? { device.resolved }
 
-    // tvOS additionally bypasses so the TVOSCapabilityError rejection
-    // happens in-process, not in a freshly spawned daemon.
+    // tvOS and physical Apple devices bypass so their rejection / Appium
+    // routing happens in-process, not in a freshly spawned daemon.
     var daemonBypass: Bool {
-        useStdin || PlatformRouter.resolve(udid: device.resolved) == .tvOSSim
+        useStdin || PlatformRouter.bypassesSimulatorDaemon(udid: device.resolved)
     }
 
     func format(_ result: ExecutionResult) -> CommandOutput { .empty }
@@ -155,10 +156,28 @@ struct Paste: SimUseExecutableCommand {
         case .tvOSSim:
             throw TVOSCapabilityError(command: "paste")
         case .appleDevice:
-            throw DeviceBackendUnsupportedError(command: "paste", deviceId: device.resolved)
+            return try await executeAppleDevice()
         case .iOSSim, .none:
             return try await executeIOSSim()
         }
+    }
+
+    /// Physical iOS device: seed the device pasteboard and deliver the text
+    /// to the focused field over WebDriverAgent (there is no hardware Cmd+V
+    /// on a device). The `--via-menu` long-press flow is Simulator-only; the
+    /// controller rejects a tvOS device with `TVOSCapabilityError`.
+    private func executeAppleDevice() async throws -> ExecutionResult {
+        if viaMenu {
+            throw CLIError(errorDescription: "--via-menu is not supported on physical devices; paste sends the text to the focused field directly.")
+        }
+        let inputText = try IOSSimPasteCommand.resolveInputText(
+            text: text, useStdin: useStdin, inputFile: inputFile, logger: nil
+        )
+        guard !inputText.isEmpty else {
+            throw CLIError(errorDescription: "Input text is empty; nothing to paste.")
+        }
+        try await AppleDeviceController.live().paste(udid: device.resolved, text: inputText)
+        return ExecutionResult()
     }
 
     private func executeIOSSim() async throws -> ExecutionResult {

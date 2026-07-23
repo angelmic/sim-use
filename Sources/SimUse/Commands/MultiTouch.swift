@@ -108,7 +108,7 @@ struct MultiTouch: SimUseExecutableCommand {
     /// tvOS never serves this verb (`execute()` throws
     /// `TVOSCapabilityError`), so reject in-process instead of spawning a
     /// per-UDID daemon for a device the daemon cannot drive.
-    var daemonBypass: Bool { PlatformRouter.resolve(udid: device.resolved) == .tvOSSim }
+    var daemonBypass: Bool { PlatformRouter.bypassesSimulatorDaemon(udid: device.resolved) }
 
     func format(_ result: ExecutionResult) -> CommandOutput {
         .line("✓ multi-touch (\(x1),\(y1))/(\(x2),\(y2)) → (\(x1End),\(y1End))/(\(x2End),\(y2End)) completed")

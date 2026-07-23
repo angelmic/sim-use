@@ -56,6 +56,21 @@ public enum PlatformRouter {
         return nil
     }
 
+    /// `true` when a device-scoped verb must skip the FBSimulator daemon
+    /// for this UDID. The daemon only drives iOS Simulators; the tvOS
+    /// Simulator and every physical Apple device run through short-lived
+    /// Appium sessions instead. Routing one of those through the daemon
+    /// would spawn a per-UDID daemon for a target it cannot attach to —
+    /// a hang, not a fail-fast — so commands bypass it here.
+    public static func bypassesSimulatorDaemon(udid: String) -> Bool {
+        switch resolve(udid: udid) {
+        case .tvOSSim, .appleDevice:
+            return true
+        case .iOSSim, .android, .none:
+            return false
+        }
+    }
+
     /// `true` when the UDID looks like an Apple Simulator UDID
     /// (8-4-4-4-12 hex, as emitted by `simctl list`).
     public static func looksLikeIOSSim(_ udid: String) -> Bool {
