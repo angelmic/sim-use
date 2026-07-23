@@ -2,9 +2,9 @@
 import Foundation
 
 /// One WebDriver request at the Appium process boundary. Keeping the transport
-/// this small makes the backend's public observe/action contract testable
+/// this small makes a backend's public observe/action contract testable
 /// without launching WebDriverAgent in unit tests.
-public struct TVOSAppiumRequest: Sendable {
+public struct AppiumRequest: Sendable {
     public let method: String
     public let url: URL
     public let body: Data?
@@ -16,7 +16,7 @@ public struct TVOSAppiumRequest: Sendable {
     }
 }
 
-public struct TVOSAppiumResponse: Sendable {
+public struct AppiumResponse: Sendable {
     public let statusCode: Int
     public let body: Data
 
@@ -26,11 +26,11 @@ public struct TVOSAppiumResponse: Sendable {
     }
 }
 
-public protocol TVOSAppiumTransport: Sendable {
-    func send(_ request: TVOSAppiumRequest) async throws -> TVOSAppiumResponse
+public protocol AppiumTransport: Sendable {
+    func send(_ request: AppiumRequest) async throws -> AppiumResponse
 }
 
-public final class URLSessionTVOSAppiumTransport: TVOSAppiumTransport, @unchecked Sendable {
+public final class URLSessionAppiumTransport: AppiumTransport, @unchecked Sendable {
     private let session: URLSession
 
     public init(session: URLSession? = nil) {
@@ -38,7 +38,7 @@ public final class URLSessionTVOSAppiumTransport: TVOSAppiumTransport, @unchecke
             self.session = session
         } else {
             let configuration = URLSessionConfiguration.ephemeral
-            // A first tvOS session may build WebDriverAgent. Subsequent
+            // A first session may build WebDriverAgent. Subsequent
             // sessions reuse it and complete in a few seconds.
             configuration.timeoutIntervalForRequest = 180
             configuration.timeoutIntervalForResource = 240
@@ -46,7 +46,7 @@ public final class URLSessionTVOSAppiumTransport: TVOSAppiumTransport, @unchecke
         }
     }
 
-    public func send(_ request: TVOSAppiumRequest) async throws -> TVOSAppiumResponse {
+    public func send(_ request: AppiumRequest) async throws -> AppiumResponse {
         var urlRequest = URLRequest(url: request.url)
         urlRequest.httpMethod = request.method
         urlRequest.httpBody = request.body
@@ -55,8 +55,8 @@ public final class URLSessionTVOSAppiumTransport: TVOSAppiumTransport, @unchecke
         }
         let (data, response) = try await session.data(for: urlRequest)
         guard let http = response as? HTTPURLResponse else {
-            throw TVOSAppiumError.invalidResponse("Appium returned a non-HTTP response.")
+            throw AppiumError.invalidResponse("Appium returned a non-HTTP response.")
         }
-        return TVOSAppiumResponse(statusCode: http.statusCode, body: data)
+        return AppiumResponse(statusCode: http.statusCode, body: data)
     }
 }
