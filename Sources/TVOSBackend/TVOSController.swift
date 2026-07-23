@@ -189,8 +189,10 @@ public struct TVOSController: Sendable {
 }
 
 /// A tvOS remote press is Appium's `mobile: pressButton` — the platform
-/// semantic that keeps AppiumCore's `execute` primitive generic.
-private extension AppiumSession {
+/// semantic that keeps AppiumCore's `execute` primitive generic. Internal
+/// (not private) so the physical-device path (`TVOSDeviceController`) shares
+/// the one definition.
+extension AppiumSession {
     func pressRemote(_ button: TVOSRemoteButton) async throws {
         try await execute(script: "mobile: pressButton", args: [["name": button.appiumName]])
     }

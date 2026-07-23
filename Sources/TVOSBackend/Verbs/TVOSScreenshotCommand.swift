@@ -46,7 +46,15 @@ public struct TVOSScreenshotCommand: SimUseExecutableCommand {
 
     public func execute() async throws -> ExecutionResult {
         let outputURL = try Self.prepareOutputURL(output: output, deviceID: device.resolved)
-        if let bundleId = target.bundleId {
+        if PlatformRouter.looksLikeAppleDevice(device.resolved) {
+            // Physical device: no `simctl io` — capture through the Appium
+            // session (device preflight + xcodebuild-flow caps).
+            let png = try await TVOSDeviceController.live().screenshot(
+                udid: device.resolved,
+                bundleId: target.bundleId
+            )
+            try png.write(to: outputURL)
+        } else if let bundleId = target.bundleId {
             // Appium path: the session brings the requested app to the
             // foreground before capturing.
             let controller = try TVOSController.live()

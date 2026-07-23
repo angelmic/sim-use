@@ -27,12 +27,21 @@ public struct TVOSDescribeUICommand: SimUseExecutableCommand {
     }
 
     public func execute() async throws -> DescribeUIResult {
-        let controller = try TVOSController.live()
+        // Physical Apple TV: the device path renders the same outline but
+        // gates `ui` off on tvOS ≤16 (WDA signal-9 crash). Simulator keeps
+        // its controller.
+        if PlatformRouter.looksLikeAppleDevice(device.resolved) {
+            return try await TVOSDeviceController.live().describeUI(
+                udid: device.resolved,
+                includeRaw: jsonOutput,
+                bundleId: target.bundleId
+            )
+        }
         return try await Self.performDescribeUI(
             udid: device.resolved,
             includeRaw: jsonOutput,
             bundleId: target.bundleId,
-            controller: controller
+            controller: try TVOSController.live()
         )
     }
 
