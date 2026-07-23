@@ -14,6 +14,13 @@ public struct AppiumCapabilities: Sendable, Encodable {
     public var usePreinstalledWDA: Bool?
     public var updatedWDABundleId: String?
     public var webDriverAgentUrl: String?
+    /// Apple Developer Team id for the xcodebuild WDA flow. Physical tvOS
+    /// 17+/26 has no `usePreinstalledWDA` path: Appium builds and launches
+    /// WDA via xcodebuild with automatic signing, which needs the org id
+    /// (`MKK9DM2XD9`) and a signing identity. Unused by the Simulator and
+    /// the iOS preinstalled-WDA paths, so it stays nil there.
+    public var xcodeOrgId: String?
+    public var xcodeSigningId: String?
 
     public init(
         platformName: String,
@@ -27,7 +34,9 @@ public struct AppiumCapabilities: Sendable, Encodable {
         wdaLocalPort: Int? = nil,
         usePreinstalledWDA: Bool? = nil,
         updatedWDABundleId: String? = nil,
-        webDriverAgentUrl: String? = nil
+        webDriverAgentUrl: String? = nil,
+        xcodeOrgId: String? = nil,
+        xcodeSigningId: String? = nil
     ) {
         self.platformName = platformName
         self.automationName = automationName
@@ -41,6 +50,8 @@ public struct AppiumCapabilities: Sendable, Encodable {
         self.usePreinstalledWDA = usePreinstalledWDA
         self.updatedWDABundleId = updatedWDABundleId
         self.webDriverAgentUrl = webDriverAgentUrl
+        self.xcodeOrgId = xcodeOrgId
+        self.xcodeSigningId = xcodeSigningId
     }
 
     enum CodingKeys: String, CodingKey {
@@ -56,6 +67,8 @@ public struct AppiumCapabilities: Sendable, Encodable {
         case usePreinstalledWDA = "appium:usePreinstalledWDA"
         case updatedWDABundleId = "appium:updatedWDABundleId"
         case webDriverAgentUrl = "appium:webDriverAgentUrl"
+        case xcodeOrgId = "appium:xcodeOrgId"
+        case xcodeSigningId = "appium:xcodeSigningId"
     }
 
     /// Optional fields are emitted with `encodeIfPresent`, never as
@@ -76,5 +89,7 @@ public struct AppiumCapabilities: Sendable, Encodable {
         try container.encodeIfPresent(usePreinstalledWDA, forKey: .usePreinstalledWDA)
         try container.encodeIfPresent(updatedWDABundleId, forKey: .updatedWDABundleId)
         try container.encodeIfPresent(webDriverAgentUrl, forKey: .webDriverAgentUrl)
+        try container.encodeIfPresent(xcodeOrgId, forKey: .xcodeOrgId)
+        try container.encodeIfPresent(xcodeSigningId, forKey: .xcodeSigningId)
     }
 }
