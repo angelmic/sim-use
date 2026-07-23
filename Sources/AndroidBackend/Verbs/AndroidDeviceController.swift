@@ -33,7 +33,10 @@ public final class AndroidDeviceController {
                 name: device.model ?? device.product ?? device.serial,
                 platform: .android,
                 state: device.state,
-                runtime: "Android"
+                runtime: "Android",
+                // `emulator-XXXX` serials are AVDs; everything else is a
+                // physical handset. Mirrors the Apple sim-vs-device split.
+                target: device.isEmulator ? .sim : .device
             )
         }
     }
