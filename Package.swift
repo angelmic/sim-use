@@ -95,6 +95,10 @@ let package = Package(
             name: "AppiumCore",
             targets: ["AppiumCore"]
         ),
+        .library(
+            name: "DeviceBackend",
+            targets: ["DeviceBackend"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0"),
@@ -171,10 +175,28 @@ let package = Package(
             path: "Sources/AppiumCore"
         ),
         .target(
+            name: "DeviceBackend",
+            // Physical Apple device (iOS/tvOS) verb engine: fail-fast
+            // preflight, capability assembly, and the WebDriverAgent-backed
+            // verbs (xd 2.0 Phase 1 T3). Depends only on the generic Appium
+            // client and the shared core — the CLI layer (SimUse executable,
+            // TVOSBackend) routes physical-device UDIDs here.
+            dependencies: [
+                "SimUseCore",
+                "AppiumCore",
+            ],
+            path: "Sources/DeviceBackend"
+        ),
+        .target(
             name: "TVOSBackend",
             dependencies: [
                 "SimUseCore",
                 "AppiumCore",
+                // The tvOS command surface reuses DeviceBackend's preflight
+                // and device-capability assembly for the physical Apple TV
+                // path (a bare Appium session on a device needs the
+                // xcodebuild-flow caps, not the Simulator ones).
+                "DeviceBackend",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             path: "Sources/TVOSBackend"
@@ -188,6 +210,7 @@ let package = Package(
                 "AndroidBackend",
                 "iOSSimBackend",
                 "TVOSBackend",
+                "DeviceBackend",
                 "FBSimulatorControl",
                 "FBControlCore",
                 "XCTestBootstrap",
@@ -230,6 +253,7 @@ let package = Package(
                 "AndroidBackendTests",
                 "TVOSBackendTests",
                 "AppiumCoreTests",
+                "DeviceBackendTests",
             ],
             resources: [
                 .copy("README.md"),
@@ -270,6 +294,11 @@ let package = Package(
             name: "AppiumCoreTests",
             dependencies: ["AppiumCore", "SimUseCore"],
             path: "Tests/AppiumCoreTests"
+        ),
+        .testTarget(
+            name: "DeviceBackendTests",
+            dependencies: ["DeviceBackend", "AppiumCore", "SimUseCore"],
+            path: "Tests/DeviceBackendTests"
         ),
         .plugin(
             name: "VersionPlugin",
