@@ -99,13 +99,23 @@ public struct AppiumClient: Sendable {
             path: "/session/\(sessionID)/element",
             body: try JSONEncoder().encode(body)
         )
+        return try elementID(from: response)
+    }
+
+    fileprivate func activeElement(sessionID: String) async throws -> String {
+        let response = try await send(method: "GET", path: "/session/\(sessionID)/element/active")
+        return try elementID(from: response)
+    }
+
+    /// Extract the element id from a W3C element response. The id is wrapped
+    /// under a spec-defined key (`element-6066-...`), so take the first
+    /// value and reject URL-hostile ids before they reach a request path.
+    private func elementID(from response: AppiumResponse) throws -> String {
         let element = try decodeValue([String: String].self, from: response)
-        // W3C wraps the id under a spec-defined key; take the first value
-        // so the legacy ELEMENT key keeps working too.
         guard let elementID = element.values.first, !elementID.isEmpty,
               elementID.range(of: "^[A-Za-z0-9._:-]+$", options: .regularExpression) != nil
         else {
-            throw AppiumError.invalidResponse("find-element response did not include a usable element id")
+            throw AppiumError.invalidResponse("element response did not include a usable element id")
         }
         return elementID
     }
@@ -119,6 +129,37 @@ public struct AppiumClient: Sendable {
             method: "POST",
             path: "/session/\(sessionID)/element/\(elementID)/value",
             body: try JSONEncoder().encode(SendKeysRequest(text: text))
+        )
+        try validate(response)
+    }
+
+    /// W3C `POST /actions` with a single pointer input source. The generic
+    /// primitive iOS tap/swipe build on; the step list is the caller's
+    /// concern. Coordinates round to integers as the spec requires.
+    fileprivate func performActions(
+        pointerType: String,
+        actions: [PointerAction],
+        sessionID: String
+    ) async throws {
+        let items = actions.map { action -> ActionItemPayload in
+            switch action {
+            case .moveTo(let x, let y, let durationMs):
+                return ActionItemPayload(type: "pointerMove", duration: durationMs, x: Int(x.rounded()), y: Int(y.rounded()), button: nil)
+            case .down:
+                return ActionItemPayload(type: "pointerDown", duration: nil, x: nil, y: nil, button: 0)
+            case .up:
+                return ActionItemPayload(type: "pointerUp", duration: nil, x: nil, y: nil, button: 0)
+            case .pause(let durationMs):
+                return ActionItemPayload(type: "pause", duration: durationMs, x: nil, y: nil, button: nil)
+            }
+        }
+        let request = ActionsRequest(actions: [
+            PointerSourcePayload(id: "finger1", parameters: ["pointerType": pointerType], actions: items)
+        ])
+        let response = try await send(
+            method: "POST",
+            path: "/session/\(sessionID)/actions",
+            body: try JSONEncoder().encode(request)
         )
         try validate(response)
     }
@@ -218,8 +259,23 @@ public struct AppiumSession: Sendable {
         try await client.findElement(className: className, sessionID: id)
     }
 
+    /// The element that currently has keyboard focus (`GET /element/active`).
+    /// The target `type` sends text to when no explicit element is given.
+    public func activeElement() async throws -> String {
+        try await client.activeElement(sessionID: id)
+    }
+
     public func sendKeys(_ text: String, elementID: String) async throws {
         try await client.sendKeys(text, elementID: elementID, sessionID: id)
+    }
+
+    /// Dispatch a W3C pointer gesture (tap / swipe / hold) built from
+    /// `PointerAction` steps. See `PointerAction.tap` / `.swipe`.
+    public func performPointerActions(
+        _ actions: [PointerAction],
+        pointerType: String = "touch"
+    ) async throws {
+        try await client.performActions(pointerType: pointerType, actions: actions, sessionID: id)
     }
 }
 
@@ -257,6 +313,41 @@ private struct FindElementRequest: Encodable {
 
 private struct SendKeysRequest: Encodable {
     let text: String
+}
+
+/// W3C `POST /actions` request body: one pointer input source whose steps
+/// are the pointerMove / pointerDown / pointerUp / pause items. Optional
+/// fields use `encodeIfPresent` so a pointerDown never sends a null `x`.
+private struct ActionsRequest: Encodable {
+    let actions: [PointerSourcePayload]
+}
+
+private struct PointerSourcePayload: Encodable {
+    let type = "pointer"
+    let id: String
+    let parameters: [String: String]
+    let actions: [ActionItemPayload]
+}
+
+private struct ActionItemPayload: Encodable {
+    let type: String
+    let duration: Int?
+    let x: Int?
+    let y: Int?
+    let button: Int?
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(type, forKey: .type)
+        try container.encodeIfPresent(duration, forKey: .duration)
+        try container.encodeIfPresent(x, forKey: .x)
+        try container.encodeIfPresent(y, forKey: .y)
+        try container.encodeIfPresent(button, forKey: .button)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type, duration, x, y, button
+    }
 }
 
 private struct ValueEnvelope<Value: Decodable>: Decodable {
