@@ -27,12 +27,24 @@ public struct Device: Codable, Equatable, Hashable, Sendable {
         case platform
         case state
         case runtime
+        case target
     }
 
     public enum Platform: String, Codable, Sendable, CaseIterable {
         case ios
         case tvos
         case android
+    }
+
+    /// Whether a row is a Simulator/emulator or a physical device. The
+    /// platform alone can't say — iOS is both an iPhone Simulator and a
+    /// physical iPhone — so the listers stamp this when they build the row
+    /// (`simctl` → `.sim`, `devicectl`/`idevice_id` → `.device`, adb
+    /// `emulator-*` → `.sim` else `.device`). Emitted in `--json` so agents
+    /// can tell a bootable Simulator from a connected device.
+    public enum Target: String, Codable, Sendable {
+        case sim
+        case device
     }
 
     /// Platform-state strings as the underlying tools emit them.
@@ -47,6 +59,11 @@ public struct Device: Codable, Equatable, Hashable, Sendable {
         public static let androidOnline = "device"
         public static let androidOffline = "offline"
         public static let androidUnauthorized = "unauthorized"
+        /// Physical Apple device reachable over the CoreDevice tunnel
+        /// (`connectionProperties.tunnelState` from `devicectl`). The
+        /// usable state for `target == .device`; "disconnected" and
+        /// "unavailable" are the not-reachable-now counterparts.
+        public static let deviceConnected = "connected"
     }
 
     public let udid: String
@@ -58,19 +75,25 @@ public struct Device: Codable, Equatable, Hashable, Sendable {
     /// the OS version via adb to keep `devices` cheap). Nil when the
     /// platform genuinely has none to report.
     public let runtime: String?
+    /// Simulator/emulator vs physical device. Defaults to `.sim` so the
+    /// many pre-existing construction sites (and the Simulator-only history
+    /// of this model) keep their meaning without a per-site edit.
+    public let target: Target
 
     public init(
         udid: String,
         name: String,
         platform: Platform,
         state: String,
-        runtime: String?
+        runtime: String?,
+        target: Target = .sim
     ) {
         self.udid = udid
         self.name = name
         self.platform = platform
         self.state = state
         self.runtime = runtime
+        self.target = target
     }
 
     public init(from decoder: Decoder) throws {
@@ -88,6 +111,8 @@ public struct Device: Codable, Equatable, Hashable, Sendable {
         self.platform = try c.decode(Platform.self, forKey: .platform)
         self.state = try c.decode(String.self, forKey: .state)
         self.runtime = try c.decodeIfPresent(String.self, forKey: .runtime)
+        // Legacy payloads predating the target field decode as Simulators.
+        self.target = try c.decodeIfPresent(Target.self, forKey: .target) ?? .sim
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -97,6 +122,7 @@ public struct Device: Codable, Equatable, Hashable, Sendable {
         try c.encode(platform, forKey: .platform)
         try c.encode(state, forKey: .state)
         try c.encodeIfPresent(runtime, forKey: .runtime)
+        try c.encode(target, forKey: .target)
     }
 
     /// Whether sim-use can talk to this device right now. iOS/tvOS: only
@@ -105,7 +131,10 @@ public struct Device: Codable, Equatable, Hashable, Sendable {
     /// bridge.
     public var isUsable: Bool {
         switch platform {
-        case .ios, .tvos: return state == State.iosBooted
+        case .ios, .tvos:
+            // A physical device is reachable when the CoreDevice tunnel is
+            // up ("connected"); a Simulator is reachable only when Booted.
+            return target == .device ? state == State.deviceConnected : state == State.iosBooted
         case .android: return state == State.androidOnline
         }
     }
