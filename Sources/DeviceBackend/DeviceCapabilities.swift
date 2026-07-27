@@ -20,6 +20,11 @@ public struct DeviceCapabilityConfig: Sendable, Equatable {
     /// dodge a port already held by another Appium (P0-C2's "change
     /// wdaLocalPort to bypass" recovery).
     public var wdaLocalPort: Int
+    /// Optional device-side port where WDA actually listens
+    /// (`appium:wdaRemotePort`). Leave nil so Appium keeps its normal
+    /// local/remote-port coupling; set `SIM_USE_WDA_REMOTE_PORT` only when a
+    /// preinstalled WDA is known to listen on a different device-side port.
+    public var wdaRemotePort: Int?
     /// tvOS xcodebuild-flow WDA product id (again suffix-free). Override via
     /// `SIM_USE_TVOS_WDA_BUNDLE_ID`.
     public var tvosWDABundleId: String
@@ -43,6 +48,7 @@ public struct DeviceCapabilityConfig: Sendable, Equatable {
     public init(
         iosWDABundleId: String = "com.facebook.WebDriverAgentRunner",
         wdaLocalPort: Int = 8100,
+        wdaRemotePort: Int? = nil,
         tvosWDABundleId: String = "com.facebook.WebDriverAgentRunner",
         xcodeOrgId: String? = nil,
         xcodeSigningId: String = "Apple Development",
@@ -51,6 +57,7 @@ public struct DeviceCapabilityConfig: Sendable, Equatable {
     ) {
         self.iosWDABundleId = iosWDABundleId
         self.wdaLocalPort = wdaLocalPort
+        self.wdaRemotePort = wdaRemotePort
         self.tvosWDABundleId = tvosWDABundleId
         self.xcodeOrgId = xcodeOrgId
         self.xcodeSigningId = xcodeSigningId
@@ -64,6 +71,7 @@ public struct DeviceCapabilityConfig: Sendable, Equatable {
         var config = DeviceCapabilityConfig()
         if let value = environment["SIM_USE_WDA_BUNDLE_ID"]?.nonBlank { config.iosWDABundleId = value }
         if let value = environment["SIM_USE_WDA_LOCAL_PORT"].flatMap({ Int($0) }) { config.wdaLocalPort = value }
+        if let value = environment["SIM_USE_WDA_REMOTE_PORT"].flatMap({ Int($0) }) { config.wdaRemotePort = value }
         if let value = environment["SIM_USE_TVOS_WDA_BUNDLE_ID"]?.nonBlank { config.tvosWDABundleId = value }
         if let value = environment["SIM_USE_XCODE_ORG_ID"]?.nonBlank { config.xcodeOrgId = value }
         if let value = environment["SIM_USE_XCODE_SIGNING_ID"]?.nonBlank { config.xcodeSigningId = value }
@@ -76,7 +84,8 @@ public struct DeviceCapabilityConfig: Sendable, Equatable {
 /// shape is a function of the resolved device facts, not a guess:
 ///
 ///   * iOS 17+ — `usePreinstalledWDA` against the pre-signed on-device
-///     WDA, addressed by `updatedWDABundleId` + `wdaLocalPort` (P0-C2).
+///     WDA, addressed by `updatedWDABundleId` plus independent local/remote
+///     WDA ports (P0-C2).
 ///   * tvOS 17+/26 — the xcodebuild flow (no preinstalled path exists on
 ///     tvOS): `xcodeOrgId` + `xcodeSigningId` + `updatedWDABundleId`
 ///     (tvOS 26 Addendum).
@@ -130,10 +139,11 @@ public enum DeviceCapabilityBuilder {
             return caps
         }
 
-        // Both modern families proxy WDA over a Mac-side port; set it
-        // explicitly so a second task-owned server can avoid a port an
-        // existing Appium already holds.
+        // Both modern families proxy WDA over a Mac-side port. Emit a
+        // device-side override only when the caller explicitly supplied one;
+        // otherwise Appium keeps its normal local/remote-port coupling.
         caps.wdaLocalPort = config.wdaLocalPort
+        caps.wdaRemotePort = config.wdaRemotePort
         switch info.family {
         case .tvos:
             // The tvOS xcodebuild flow signs WDA with the caller's Apple

@@ -36,6 +36,7 @@ final class AppiumCapabilitiesTests: XCTestCase {
             "appium:usePreinstalledWDA",
             "appium:updatedWDABundleId",
             "appium:wdaLocalPort",
+            "appium:wdaRemotePort",
             "appium:webDriverAgentUrl",
         ] {
             XCTAssertNil(json[absent], "\(absent) must be omitted for tvOS Simulator caps")
@@ -64,7 +65,8 @@ final class AppiumCapabilitiesTests: XCTestCase {
             platformName: "iOS",
             automationName: "XCUITest",
             udid: "00008140-00096D5C0CEA801C",
-            wdaLocalPort: 8100,
+            wdaLocalPort: 8110,
+            wdaRemotePort: 8100,
             usePreinstalledWDA: true,
             updatedWDABundleId: "com.catchplay.WebDriverAgentRunner"
         ))
@@ -72,7 +74,8 @@ final class AppiumCapabilitiesTests: XCTestCase {
         XCTAssertEqual(json["platformName"] as? String, "iOS")
         XCTAssertEqual(json["appium:automationName"] as? String, "XCUITest")
         XCTAssertEqual(json["appium:udid"] as? String, "00008140-00096D5C0CEA801C")
-        XCTAssertEqual(json["appium:wdaLocalPort"] as? Int, 8100)
+        XCTAssertEqual(json["appium:wdaLocalPort"] as? Int, 8110)
+        XCTAssertEqual(json["appium:wdaRemotePort"] as? Int, 8100)
         XCTAssertEqual(json["appium:usePreinstalledWDA"] as? Bool, true)
         XCTAssertEqual(json["appium:updatedWDABundleId"] as? String, "com.catchplay.WebDriverAgentRunner")
         for absent in [
@@ -99,7 +102,12 @@ final class AppiumCapabilitiesTests: XCTestCase {
         XCTAssertEqual(json["platformName"] as? String, "tvOS")
         XCTAssertEqual(json["appium:udid"] as? String, "c311e5afe90ee702b80e8b64e1e12796e04e63a0")
         XCTAssertEqual(json["appium:webDriverAgentUrl"] as? String, "http://127.0.0.1:8104")
-        for absent in ["appium:usePreinstalledWDA", "appium:updatedWDABundleId", "appium:wdaLocalPort"] {
+        for absent in [
+            "appium:usePreinstalledWDA",
+            "appium:updatedWDABundleId",
+            "appium:wdaLocalPort",
+            "appium:wdaRemotePort",
+        ] {
             XCTAssertNil(json[absent], "\(absent) must be omitted for the tvOS classic assembly")
         }
     }

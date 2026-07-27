@@ -28,6 +28,7 @@ final class DeviceCapabilitiesTests: XCTestCase {
         XCTAssertEqual(wire["appium:usePreinstalledWDA"] as? Bool, true)
         XCTAssertEqual(wire["appium:updatedWDABundleId"] as? String, "com.facebook.WebDriverAgentRunner")
         XCTAssertEqual(wire["appium:wdaLocalPort"] as? Int, 8100)
+        XCTAssertNil(wire["appium:wdaRemotePort"])
         XCTAssertEqual(wire["appium:newCommandTimeout"] as? Int, 120)
         // noReset always on for a real device; no target app ⇒ no
         // autoLaunch / shouldTerminateApp overrides (driver default).
@@ -64,6 +65,7 @@ final class DeviceCapabilitiesTests: XCTestCase {
         // wdaLocalPort applies to tvOS too, so a second task-owned server can
         // dodge a port another Appium already holds (P0-C2 recovery).
         XCTAssertEqual(wire["appium:wdaLocalPort"] as? Int, 8100)
+        XCTAssertNil(wire["appium:wdaRemotePort"])
         // No preinstalled path on tvOS: usePreinstalledWDA must be absent.
         XCTAssertNil(wire["appium:usePreinstalledWDA"])
         XCTAssertNil(wire["appium:webDriverAgentUrl"])
@@ -130,6 +132,7 @@ final class DeviceCapabilitiesTests: XCTestCase {
         let cfg = DeviceCapabilityConfig.live(environment: [
             "SIM_USE_WDA_BUNDLE_ID": "com.acme.WDA",
             "SIM_USE_WDA_LOCAL_PORT": "8199",
+            "SIM_USE_WDA_REMOTE_PORT": "8101",
             "SIM_USE_TVOS_WDA_BUNDLE_ID": "com.acme.tvwda",
             "SIM_USE_XCODE_ORG_ID": "TEAM123456",
             "SIM_USE_XCODE_SIGNING_ID": "iPhone Developer",
@@ -137,6 +140,7 @@ final class DeviceCapabilitiesTests: XCTestCase {
         ])
         XCTAssertEqual(cfg.iosWDABundleId, "com.acme.WDA")
         XCTAssertEqual(cfg.wdaLocalPort, 8199)
+        XCTAssertEqual(cfg.wdaRemotePort, 8101)
         XCTAssertEqual(cfg.tvosWDABundleId, "com.acme.tvwda")
         XCTAssertEqual(cfg.xcodeOrgId, "TEAM123456")
         XCTAssertEqual(cfg.xcodeSigningId, "iPhone Developer")
@@ -148,6 +152,8 @@ final class DeviceCapabilitiesTests: XCTestCase {
         // App/team-agnostic defaults (D7): WDA convention id, no team id.
         XCTAssertEqual(cfg.iosWDABundleId, "com.facebook.WebDriverAgentRunner")
         XCTAssertEqual(cfg.tvosWDABundleId, "com.facebook.WebDriverAgentRunner")
+        XCTAssertEqual(cfg.wdaLocalPort, 8100)
+        XCTAssertNil(cfg.wdaRemotePort)
         XCTAssertNil(cfg.xcodeOrgId)
         XCTAssertNil(cfg.externalWDAURL)
     }

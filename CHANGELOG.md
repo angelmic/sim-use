@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     silently defaults to `http://127.0.0.1:4723`).
   - App-agnostic capability defaults (`SIM_USE_WDA_BUNDLE_ID`, `SIM_USE_TVOS_WDA_BUNDLE_ID`,
     `SIM_USE_XCODE_ORG_ID`); team/app-specific values are injected via env only.
+  - Optional independent Mac/device WDA ports (`SIM_USE_WDA_LOCAL_PORT` and
+    `SIM_USE_WDA_REMOTE_PORT`) let a task-owned Appium proxy reach a
+    preinstalled WDA on an explicitly different device port; with no remote
+    override, Appium retains its normal local/remote-port coupling.
   - Physical-device discovery keeps rich `devicectl` metadata while treating a
     matching live `idevice_id -l` USB attachment as connected. This avoids a
     false negative when CoreDevice's local-network row remains at `connecting`.

@@ -11,6 +11,11 @@ public struct AppiumCapabilities: Sendable, Encodable {
     public var useNewWDA: Bool?
     public var newCommandTimeout: Int?
     public var wdaLocalPort: Int?
+    /// Port WebDriverAgent listens on on the physical device. This is
+    /// intentionally independent from `wdaLocalPort`: a preinstalled WDA
+    /// commonly remains on 8100 while the Mac-side proxy must use another
+    /// port because 8100 is already occupied.
+    public var wdaRemotePort: Int?
     public var usePreinstalledWDA: Bool?
     public var updatedWDABundleId: String?
     public var webDriverAgentUrl: String?
@@ -37,6 +42,7 @@ public struct AppiumCapabilities: Sendable, Encodable {
         useNewWDA: Bool? = nil,
         newCommandTimeout: Int? = nil,
         wdaLocalPort: Int? = nil,
+        wdaRemotePort: Int? = nil,
         usePreinstalledWDA: Bool? = nil,
         updatedWDABundleId: String? = nil,
         webDriverAgentUrl: String? = nil,
@@ -53,6 +59,7 @@ public struct AppiumCapabilities: Sendable, Encodable {
         self.useNewWDA = useNewWDA
         self.newCommandTimeout = newCommandTimeout
         self.wdaLocalPort = wdaLocalPort
+        self.wdaRemotePort = wdaRemotePort
         self.usePreinstalledWDA = usePreinstalledWDA
         self.updatedWDABundleId = updatedWDABundleId
         self.webDriverAgentUrl = webDriverAgentUrl
@@ -71,6 +78,7 @@ public struct AppiumCapabilities: Sendable, Encodable {
         case useNewWDA = "appium:useNewWDA"
         case newCommandTimeout = "appium:newCommandTimeout"
         case wdaLocalPort = "appium:wdaLocalPort"
+        case wdaRemotePort = "appium:wdaRemotePort"
         case usePreinstalledWDA = "appium:usePreinstalledWDA"
         case updatedWDABundleId = "appium:updatedWDABundleId"
         case webDriverAgentUrl = "appium:webDriverAgentUrl"
@@ -94,6 +102,7 @@ public struct AppiumCapabilities: Sendable, Encodable {
         try container.encodeIfPresent(useNewWDA, forKey: .useNewWDA)
         try container.encodeIfPresent(newCommandTimeout, forKey: .newCommandTimeout)
         try container.encodeIfPresent(wdaLocalPort, forKey: .wdaLocalPort)
+        try container.encodeIfPresent(wdaRemotePort, forKey: .wdaRemotePort)
         try container.encodeIfPresent(usePreinstalledWDA, forKey: .usePreinstalledWDA)
         try container.encodeIfPresent(updatedWDABundleId, forKey: .updatedWDABundleId)
         try container.encodeIfPresent(webDriverAgentUrl, forKey: .webDriverAgentUrl)
