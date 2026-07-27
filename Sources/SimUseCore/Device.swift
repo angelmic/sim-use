@@ -59,10 +59,11 @@ public struct Device: Codable, Equatable, Hashable, Sendable {
         public static let androidOnline = "device"
         public static let androidOffline = "offline"
         public static let androidUnauthorized = "unauthorized"
-        /// Physical Apple device reachable over the CoreDevice tunnel
-        /// (`connectionProperties.tunnelState` from `devicectl`). The
-        /// usable state for `target == .device`; "disconnected" and
-        /// "unavailable" are the not-reachable-now counterparts.
+        /// Physical Apple device reachable either through CoreDevice
+        /// (`connectionProperties.tunnelState` from `devicectl`) or through
+        /// a live `idevice_id -l` USB attachment. The usable state for
+        /// `target == .device`; "disconnected" and "unavailable" are the
+        /// not-reachable-now counterparts.
         public static let deviceConnected = "connected"
     }
 
@@ -132,8 +133,8 @@ public struct Device: Codable, Equatable, Hashable, Sendable {
     public var isUsable: Bool {
         switch platform {
         case .ios, .tvos:
-            // A physical device is reachable when the CoreDevice tunnel is
-            // up ("connected"); a Simulator is reachable only when Booted.
+            // A physical device is reachable when its merged effective state
+            // is "connected"; a Simulator is reachable only when Booted.
             return target == .device ? state == State.deviceConnected : state == State.iosBooted
         case .android: return state == State.androidOnline
         }

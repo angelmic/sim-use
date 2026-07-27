@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     silently defaults to `http://127.0.0.1:4723`).
   - App-agnostic capability defaults (`SIM_USE_WDA_BUNDLE_ID`, `SIM_USE_TVOS_WDA_BUNDLE_ID`,
     `SIM_USE_XCODE_ORG_ID`); team/app-specific values are injected via env only.
+  - Physical-device discovery keeps rich `devicectl` metadata while treating a
+    matching live `idevice_id -l` USB attachment as connected. This avoids a
+    false negative when CoreDevice's local-network row remains at `connecting`.
   - New `scripts/test-runner-ios-device.sh` (requires-device; SKIPs cleanly when absent).
 
 - Experimental tvOS Simulator support through Appium/XCUITest: top-level `ui` and `screenshot`, the `sim-use tvos` namespace, and focus-aware `tvos remote <up|down|left|right|select|menu|play-pause|home>`. Each operation owns and closes a short-lived WebDriver session; `--bundle-id` (or `SIM_USE_TVOS_BUNDLE_ID` for top-level verbs) restores the target app after a cold WDA launch, and `SIM_USE_APPIUM_URL` overrides the default `http://127.0.0.1:4723` endpoint. `tvos type <text>` enters whole strings into the focused text field through the focus keyboard (WebDriver element sendKeys — the only string-entry channel tvOS exposes; the tvOS WebDriverAgent has no keyboardInput or W3C key actions).

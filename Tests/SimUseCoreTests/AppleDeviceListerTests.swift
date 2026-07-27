@@ -94,6 +94,32 @@ struct AppleDeviceListerMergeTests {
         #expect(merged[0].name == "CP 16 Pro Max")
     }
 
+    @Test("a live USB overlap promotes a stale devicectl row without losing metadata")
+    func promotesReachableOverlap() throws {
+        let staleRows = [
+            Device(udid: "00008140-00096D5C0CEA801C", name: "CP 16 Pro Max",
+                   platform: .ios, state: "connecting", runtime: "iOS 18.7.8", target: .device),
+            Device(udid: "OTHER", name: "Offline iPhone",
+                   platform: .ios, state: "unavailable", runtime: "iOS 18.7", target: .device),
+        ]
+
+        let merged = AppleDeviceLister.mergeIdeviceIDUDIDs(
+            into: staleRows,
+            udids: ["  00008140-00096D5C0CEA801C  ", ""]
+        )
+
+        #expect(merged.count == 2)
+        let cp = try #require(merged.first { $0.udid == "00008140-00096D5C0CEA801C" })
+        #expect(cp.name == "CP 16 Pro Max")
+        #expect(cp.platform == .ios)
+        #expect(cp.runtime == "iOS 18.7.8")
+        #expect(cp.state == Device.State.deviceConnected)
+        #expect(cp.isUsable)
+        let offline = try #require(merged.first { $0.udid == "OTHER" })
+        #expect(offline.state == "unavailable")
+        #expect(!offline.isUsable)
+    }
+
     @Test("a UDID seen only via idevice_id is added as a minimal device row")
     func addsIdeviceOnly() {
         let merged = AppleDeviceLister.mergeIdeviceIDUDIDs(

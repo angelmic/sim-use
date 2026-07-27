@@ -9,10 +9,11 @@ import SimUseCore
 ///   1. `GET /status` against the Appium server with a 3 s ceiling — a
 ///      wedged or absent server answers here in seconds instead of hanging
 ///      the session POST for ~90 s (P0-C2).
-///   2. The CoreDevice tunnel for the target device is `connected`
-///      (resolved from `devicectl`) — an unplugged / untrusted device is
-///      rejected before a session POST would silently stall on the WDA
-///      handshake.
+///   2. Merged Apple-device discovery reports the target as `connected`.
+///      A live `idevice_id -l` USB attachment can promote a stale
+///      CoreDevice "connecting" row; otherwise an unplugged / untrusted
+///      device is rejected before a session POST would silently stall on
+///      the WDA handshake.
 ///
 /// Both the status transport and the device-info source are injected so the
 /// gate is unit-testable without a live server or a cabled device.

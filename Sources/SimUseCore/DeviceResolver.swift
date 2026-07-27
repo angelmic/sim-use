@@ -236,9 +236,11 @@ extension String {
 ///     `hardwareProperties.udid`; the top-level `identifier` is the
 ///     CoreDevice UUID and must NOT be used as the UDID.
 ///   • `idevice_id -l` — libimobiledevice's classic USB path. One bare UDID
-///     per line, so a device only it reports becomes a minimal row. Skipped
-///     when `idevice_id` isn't installed (the runner returns [] on the
-///     `env` exit-127 "command not found").
+///     per line. A matching devicectl row keeps its rich metadata but is
+///     promoted to the effective "connected" state because the USB probe is
+///     live; a device only it reports becomes a minimal row. Skipped when
+///     `idevice_id` isn't installed (the runner returns [] on the `env`
+///     exit-127 "command not found").
 public enum AppleDeviceLister {
     public enum ListerError: Error, LocalizedError {
         case parseFailed(String)
@@ -306,13 +308,37 @@ public enum AppleDeviceLister {
     // MARK: - idevice_id merge
 
     /// Fold bare `idevice_id -l` UDIDs into the devicectl rows: dedupe by
-    /// UDID (the richer devicectl row wins), and add a minimal `.device`
-    /// row for any UDID only libimobiledevice knows about. idevice_id can't
-    /// report platform/name, so the fallback assumes iOS and "connected"
-    /// (it only ever lists reachable USB devices).
+    /// UDID while keeping the richer devicectl metadata, promote a matching
+    /// row to the effective "connected" state, and add a minimal `.device`
+    /// row for any UDID only libimobiledevice knows about.
+    ///
+    /// The promotion matters when CoreDevice's cached/local-network row is
+    /// stuck at "connecting" even though usbmux can currently reach the
+    /// cabled device. `idevice_id -l` only emits live USB attachments, so it
+    /// is a stronger reachability signal for that overlap without forcing us
+    /// to discard devicectl's name/platform/runtime metadata.
     public static func mergeIdeviceIDUDIDs(into devices: [Device], udids: [String]) -> [Device] {
-        let known = Set(devices.map(\.udid))
-        let extras = udids
+        let reachableUDIDs = Set(
+            udids
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+        let promoted = devices.map { device in
+            guard reachableUDIDs.contains(device.udid),
+                  device.target == .device,
+                  device.state != Device.State.deviceConnected
+            else { return device }
+            return Device(
+                udid: device.udid,
+                name: device.name,
+                platform: device.platform,
+                state: Device.State.deviceConnected,
+                runtime: device.runtime,
+                target: device.target
+            )
+        }
+        let known = Set(promoted.map(\.udid))
+        let extras = reachableUDIDs
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && !known.contains($0) }
             .sorted()
@@ -326,7 +352,7 @@ public enum AppleDeviceLister {
                     target: .device
                 )
             }
-        return devices + extras
+        return promoted + extras
     }
 
     // MARK: - live enumeration

@@ -6,7 +6,8 @@ import SimUseCore
 /// backend needs before it opens an Appium session: which family it is
 /// (iOS vs tvOS decides the capability shape and the verb matrix), which
 /// OS major version it runs (the modern ≥17 WebDriverAgent path vs the
-/// classic ≤16 one), and whether the CoreDevice tunnel is up right now.
+/// classic ≤16 one), and whether merged Apple-device discovery says it is
+/// reachable right now.
 ///
 /// Resolved from the same `devicectl` enumeration the `sim-use devices`
 /// verb uses (`AppleDeviceLister`), so a device that lists there resolves
@@ -19,8 +20,9 @@ public struct PhysicalDeviceInfo: Sendable, Equatable {
     /// bare `idevice_id` fallback row, which is always iOS and always a
     /// modern device, so the ≥17 gate treats a nil major as modern.
     public let osMajorVersion: Int?
-    /// `connectionProperties.tunnelState` verbatim ("connected" when the
-    /// device is reachable; "disconnected" / "unavailable" otherwise).
+    /// Effective connection state. This is normally
+    /// `connectionProperties.tunnelState`, but a live `idevice_id -l` USB
+    /// overlap promotes a stale "connecting" CoreDevice row to "connected".
     public let tunnelState: String
 
     public init(udid: String, family: Device.Platform, osMajorVersion: Int?, tunnelState: String) {
@@ -30,8 +32,8 @@ public struct PhysicalDeviceInfo: Sendable, Equatable {
         self.tunnelState = tunnelState
     }
 
-    /// The CoreDevice tunnel is up — a session can be created. Keys off the
-    /// same "connected" literal `Device.isUsable` uses for physical devices.
+    /// Device discovery has a live route — a session can be attempted. Keys
+    /// off the same "connected" literal `Device.isUsable` uses.
     public var isConnected: Bool { tunnelState == Device.State.deviceConnected }
 
     /// The device runs iOS/tvOS 17 or newer, i.e. the WebDriverAgent
