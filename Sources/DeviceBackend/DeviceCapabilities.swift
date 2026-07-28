@@ -25,8 +25,9 @@ public struct DeviceCapabilityConfig: Sendable, Equatable {
     /// local/remote-port coupling; set `SIM_USE_WDA_REMOTE_PORT` only when a
     /// preinstalled WDA is known to listen on a different device-side port.
     public var wdaRemotePort: Int?
-    /// tvOS xcodebuild-flow WDA product id (again suffix-free). Override via
-    /// `SIM_USE_TVOS_WDA_BUNDLE_ID`.
+    /// tvOS WDA product id (again suffix-free). The installed-runner
+    /// supervisor appends `.xctrunner`; the xcodebuild repair path uses the
+    /// same id. Override via `SIM_USE_TVOS_WDA_BUNDLE_ID`.
     public var tvosWDABundleId: String
     /// Apple Developer **Team id** for the tvOS xcodebuild WDA build. No
     /// universal default exists (it is account-specific), so it is Optional;
@@ -86,16 +87,18 @@ public struct DeviceCapabilityConfig: Sendable, Equatable {
 ///   * iOS 17+ — `usePreinstalledWDA` against the pre-signed on-device
 ///     WDA, addressed by `updatedWDABundleId` plus independent local/remote
 ///     WDA ports (P0-C2).
-///   * tvOS 17+/26 — the xcodebuild flow (no preinstalled path exists on
-///     tvOS): `xcodeOrgId` + `xcodeSigningId` + `updatedWDABundleId`
-///     (tvOS 26 Addendum).
+///   * tvOS 17+/26 — normally attach-only to the XCTest-backed installed
+///     runner owned by `TVOSWDASupervisor`. If that path is disabled or has
+///     no target app, this builder retains the signed xcodebuild repair
+///     path: `xcodeOrgId` + `xcodeSigningId` + `updatedWDABundleId`.
 ///   * ≤16.x (either family) — the classic external `webDriverAgentUrl`;
 ///     absent `SIM_USE_WDA_URL` is a fail-fast, not a silent hang.
 public enum DeviceCapabilityBuilder {
     public static func capabilities(
         for info: PhysicalDeviceInfo,
         bundleId: String?,
-        config: DeviceCapabilityConfig
+        config: DeviceCapabilityConfig,
+        externalWDAURL: String? = nil
     ) throws -> AppiumCapabilities {
         let platformName = info.family == .tvos ? "tvOS" : "iOS"
         // A bundle id makes the session attach to (and foreground) that app;
@@ -125,6 +128,16 @@ public enum DeviceCapabilityBuilder {
             newCommandTimeout: config.newCommandTimeout,
             shouldTerminateApp: targetsApp ? false : nil
         )
+
+        // A caller-owned WDA lifecycle (currently the modern physical-tvOS
+        // XCTest supervisor) is an attach-only Appium session. Return before
+        // adding any xcodebuild, preinstalled-launch, or proxy-port
+        // capabilities: those would make Appium try to own the same WDA a
+        // second time.
+        if let externalWDAURL = externalWDAURL?.nonBlank {
+            caps.webDriverAgentUrl = externalWDAURL
+            return caps
+        }
 
         guard info.isModern else {
             // Classic ≤16.x: WDA can only be reached over an externally

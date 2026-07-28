@@ -47,10 +47,9 @@ public struct PhysicalDeviceInfo: Sendable, Equatable {
     /// off the same "connected" literal `Device.isUsable` uses.
     public var isConnected: Bool { tunnelState == Device.State.deviceConnected }
 
-    /// The device runs iOS/tvOS 17 or newer, i.e. the WebDriverAgent
-    /// `usePreinstalledWDA` / xcodebuild-flow path rather than the classic
-    /// external-`webDriverAgentUrl` one. A nil major (idevice_id fallback,
-    /// always iOS) counts as modern.
+    /// The device runs iOS/tvOS 17 or newer, i.e. a CoreDevice/RemoteXPC
+    /// WebDriverAgent path rather than the classic external-tunnel recipe.
+    /// A nil major (idevice_id fallback, always iOS) counts as modern.
     public var isModern: Bool {
         guard let osMajorVersion else { return true }
         return osMajorVersion >= 17

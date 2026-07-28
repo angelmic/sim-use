@@ -17,7 +17,7 @@ This verifies sim-use is installed, the device is reachable, and its backend tra
 2. `sim-use devices` — confirm the target device is listed and booted/connected.
 3. `sim-use ui --device <UDID>` — confirm you can read the screen.
 
-`--device` is optional when only one simulator is booted or one daemon is running. For Android, run `sim-use android init --device <serial>` once to install the bridge APK. For tvOS, start Appium with the XCUITest driver before preflight (`appium --port 4723`; override with `SIM_USE_APPIUM_URL`) and pass the target app as `sim-use tvos ui --bundle-id <id>` so a cold WDA launch restores it before observation.
+`--device` is optional when only one simulator is booted or one daemon is running. For Android, run `sim-use android init --device <serial>` once to install the bridge APK. For tvOS, start Appium with the XCUITest driver before preflight (`appium --port 4723`; override with `SIM_USE_APPIUM_URL`) and pass the target app as `sim-use tvos ui --bundle-id <id>` so a cold WDA launch restores it before observation. A modern physical Apple TV also needs a live RemoteXPC tunnel and `SIM_USE_TVOS_WDA_BUNDLE_ID` matching its installed signed runner.
 
 ## 1. The observe-act loop
 
@@ -111,7 +111,7 @@ Quick symptom index — see `references/pitfalls.md` for detailed recipes.
 | iOS: `paste` drops text | Soft keyboard only; HID Cmd+V is ignored | Use `paste --via-menu --target-id <id>` |
 | Android: `paste` denied | Background clipboard access blocked | Use `type` instead |
 | tvOS: `Cannot reach Appium` | Appium is not running at `SIM_USE_APPIUM_URL` | Run `appium --port 4723`; ensure `appium driver list --installed` includes XCUITest |
-| tvOS device: the first WDA launch is slow or asks for signing approval | A modern physical Apple TV needs one valid host build/sign before its per-UDID cache can use Appium's prebuilt path | Keep the login keychain/private key available for the first build. Successful sessions record `signedAt`, profile expiry, and `lastSuccessfulLaunchAt` in `~/.sim-use/<UDID>/wda-signing-cache.json`; later matching launches reuse `wda-derived-data`. Set `SIM_USE_WDA_CACHE=0` only for diagnosis |
+| tvOS device: repeated first WDA launch is slow or asks for signing approval | Appium fell through to xcodebuild instead of reusing the installed runner through XCTest/testmanagerd | Supply `--bundle-id` (or `SIM_USE_TVOS_BUNDLE_ID`) and the installed product id in `SIM_USE_TVOS_WDA_BUNDLE_ID`. sim-use health-checks and retains a per-UDID supervisor; inspect `~/.sim-use/<UDID>/tvos-wda-supervisor.json`. A live RemoteXPC tunnel is still required. `wda-signing-cache.json` remains the build/sign repair cache when the supervisor is disabled or unavailable |
 | tvOS: `ui` unexpectedly shows Home after Appium starts | A cold WDA launch changed the foreground app and no target was supplied | Re-run the namespaced command with `--bundle-id <id>`, or set `SIM_USE_TVOS_BUNDLE_ID` for top-level `ui` / `screenshot` |
 | tvOS: `type` says it needs focus on a text field | Focus sits on a button/cell, not a text field | Run `ui`, move focus onto the `TextField` with `tvos remote`, retry |
 | tvOS: focus does not move | Direction is unavailable from the current focus graph (`remote` already waits 0.35 s for the focus animation) | Re-run `ui` and choose another direction; for slow transitions raise `--settle-delay` |

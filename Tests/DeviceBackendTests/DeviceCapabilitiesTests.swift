@@ -81,6 +81,37 @@ final class DeviceCapabilitiesTests: XCTestCase {
         XCTAssertNil(wire["appium:webDriverAgentUrl"])
     }
 
+    func testTVOSModernExternalSupervisorOmitsXcodebuildAndPortCapabilities() throws {
+        var cfg = config
+        cfg.tvosWDABundleId = "com.catchplay.wda"
+        cfg.xcodeOrgId = "TEAMID1234"
+        cfg.wdaLocalPort = 8105
+        cfg.wdaRemotePort = 8100
+
+        let caps = try DeviceCapabilityBuilder.capabilities(
+            for: info(family: .tvos, major: 26),
+            bundleId: "com.catchplay.AsiaPlay",
+            config: cfg,
+            externalWDAURL: "http://127.0.0.1:8105"
+        )
+        let wire = try encoded(caps)
+
+        XCTAssertEqual(wire["appium:webDriverAgentUrl"] as? String, "http://127.0.0.1:8105")
+        XCTAssertEqual(wire["appium:bundleId"] as? String, "com.catchplay.AsiaPlay")
+        for absent in [
+            "appium:usePreinstalledWDA",
+            "appium:usePrebuiltWDA",
+            "appium:updatedWDABundleId",
+            "appium:wdaLocalPort",
+            "appium:wdaRemotePort",
+            "appium:xcodeOrgId",
+            "appium:xcodeSigningId",
+            "appium:derivedDataPath",
+        ] {
+            XCTAssertNil(wire[absent], "\(absent) must be omitted when sim-use owns the tvOS WDA lifecycle")
+        }
+    }
+
     func testTVOSModernWithoutOrgIdFailsFast() {
         // Default config has no Team id (D7): the tvOS xcodebuild flow must
         // fail fast with a format-only hint, never a baked-in team id.

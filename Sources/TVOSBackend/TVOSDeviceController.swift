@@ -6,8 +6,9 @@ import SimUseCore
 
 /// The physical Apple TV path for the focus-driven tvOS verbs. Distinct
 /// from `TVOSController` (the Simulator) because a real device needs the
-/// DeviceBackend preflight (server + tunnel) and the xcodebuild-flow
-/// capabilities, and because the Simulator's HID fast path and
+/// DeviceBackend preflight (server + tunnel) and an XCTest-backed installed
+/// WDA lifecycle (with xcodebuild retained as a repair path), and because
+/// the Simulator's HID fast path and
 /// `simctl io screenshot` shortcut do not exist on a device — every verb
 /// goes through one preflighted, always-deleted Appium session.
 ///
@@ -20,19 +21,22 @@ public struct TVOSDeviceController: Sendable {
     private let config: DeviceCapabilityConfig
     private let defaultBundleId: String?
     private let wdaCache: WDADeviceCache
+    private let wdaEndpointProvider: TVOSWDAEndpointProvider
 
     public init(
         client: AppiumClient,
         preflight: DevicePreflight,
         config: DeviceCapabilityConfig,
         defaultBundleId: String? = nil,
-        wdaCache: WDADeviceCache = .disabled()
+        wdaCache: WDADeviceCache = .disabled(),
+        wdaEndpointProvider: TVOSWDAEndpointProvider = .disabled()
     ) {
         self.client = client
         self.preflight = preflight
         self.config = config
         self.defaultBundleId = defaultBundleId?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyOrNil
         self.wdaCache = wdaCache
+        self.wdaEndpointProvider = wdaEndpointProvider
     }
 
     public static func live(
@@ -43,7 +47,8 @@ public struct TVOSDeviceController: Sendable {
             preflight: try .live(environment: environment),
             config: .live(environment: environment),
             defaultBundleId: environment["SIM_USE_TVOS_BUNDLE_ID"],
-            wdaCache: .live(environment: environment)
+            wdaCache: .live(environment: environment),
+            wdaEndpointProvider: .live(environment: environment)
         )
     }
 
@@ -112,6 +117,40 @@ public struct TVOSDeviceController: Sendable {
         operation: @escaping (AppiumSession) async throws -> Result
     ) async throws -> Result {
         let resolved = resolvedBundleId(bundleId)
+
+        // Modern tvOS has an installed-runner fast path that sim-use owns:
+        // launch it as a real XCTest through testmanagerd, keep that
+        // lifecycle alive, and give Appium only its local URL. This avoids
+        // Appium's bare ProcessControl preinstalled launch (which exits
+        // immediately on tvOS) and avoids an xcodebuild/sign pass when the
+        // installed signature is still valid.
+        if let resolved,
+           let endpoint = try await wdaEndpointProvider.endpoint(
+               for: info,
+               targetBundleId: resolved,
+               config: config
+           )
+        {
+            let capabilities = try DeviceCapabilityBuilder.capabilities(
+                for: info,
+                bundleId: resolved,
+                config: config,
+                externalWDAURL: endpoint.absoluteString
+            )
+            do {
+                return try await runSession(
+                    capabilities: capabilities,
+                    resolvedBundleId: resolved,
+                    onSessionCreated: {},
+                    operation: operation
+                )
+            } catch let creationError as AppiumSessionCreationError {
+                // The endpoint provider owns this WDA. Do not cross from
+                // attach-only into an implicit xcodebuild/sign retry.
+                throw creationError.underlying
+            }
+        }
+
         let plan = wdaCache.plan(for: info, config: config)
         var capabilities = try DeviceCapabilityBuilder.capabilities(
             for: info,

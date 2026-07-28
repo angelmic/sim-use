@@ -185,7 +185,10 @@ let package = Package(
                 "SimUseCore",
                 "AppiumCore",
             ],
-            path: "Sources/DeviceBackend"
+            path: "Sources/DeviceBackend",
+            resources: [
+                .copy("Resources"),
+            ]
         ),
         .target(
             name: "TVOSBackend",

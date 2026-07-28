@@ -25,7 +25,8 @@ final class TVOSDeviceControllerTests: XCTestCase {
     private func makeController(
         _ responses: [Result<AppiumResponse, Error>],
         device: Device,
-        wdaCache: WDADeviceCache = .disabled()
+        wdaCache: WDADeviceCache = .disabled(),
+        wdaEndpointProvider: TVOSWDAEndpointProvider = .disabled()
     ) -> (TVOSDeviceController, MockTransport) {
         let transport = MockTransport(responses: responses)
         let base = URL(string: "http://127.0.0.1:4799")!
@@ -39,7 +40,8 @@ final class TVOSDeviceControllerTests: XCTestCase {
             // Team id has no default (D7); supply one so the tvOS xcodebuild
             // caps assemble instead of failing fast.
             config: tvConfig(),
-            wdaCache: wdaCache
+            wdaCache: wdaCache,
+            wdaEndpointProvider: wdaEndpointProvider
         )
         return (controller, transport)
     }
@@ -62,6 +64,34 @@ final class TVOSDeviceControllerTests: XCTestCase {
         XCTAssertEqual(caps.capabilities.alwaysMatch.platformName, "tvOS")
         XCTAssertEqual(caps.capabilities.alwaysMatch.xcodeOrgId, "TEAMID1234")
         XCTAssertEqual(caps.capabilities.alwaysMatch.updatedWDABundleId, "com.facebook.WebDriverAgentRunner")
+    }
+
+    func testModernDeviceUsesSupervisorEndpointInsteadOfXcodebuildCaps() async throws {
+        let provider = TVOSWDAEndpointProvider { info, bundleId, config in
+            XCTAssertEqual(info.udid, self.tvUDID)
+            XCTAssertEqual(bundleId, "com.catchplay.AsiaPlay")
+            XCTAssertEqual(config.wdaRemotePort, nil)
+            return URL(string: "http://127.0.0.1:8105")!
+        }
+        let (controller, transport) = makeController(
+            [statusOK(), sessionResponse(), emptyOK(), sourceResponse(focusedLabel: "登入"), emptyOK()],
+            device: device(major: 26),
+            wdaEndpointProvider: provider
+        )
+
+        _ = try await controller.describeUI(
+            udid: tvUDID,
+            includeRaw: false,
+            bundleId: "com.catchplay.AsiaPlay"
+        )
+
+        let requests = await transport.recordedRequests()
+        let caps = try decodeCaps(requests[1])
+        XCTAssertEqual(caps.capabilities.alwaysMatch.webDriverAgentUrl, "http://127.0.0.1:8105")
+        XCTAssertNil(caps.capabilities.alwaysMatch.xcodeOrgId)
+        XCTAssertNil(caps.capabilities.alwaysMatch.updatedWDABundleId)
+        XCTAssertNil(caps.capabilities.alwaysMatch.usePrebuiltWDA)
+        XCTAssertNil(caps.capabilities.alwaysMatch.derivedDataPath)
     }
 
     func testClassicDeviceUIFailsFastBeforeSession() async {
@@ -206,6 +236,7 @@ final class TVOSDeviceControllerTests: XCTestCase {
                 let updatedWDABundleId: String?
                 let usePrebuiltWDA: Bool?
                 let derivedDataPath: String?
+                let webDriverAgentUrl: String?
                 enum CodingKeys: String, CodingKey {
                     case platformName
                     case platformVersion = "appium:platformVersion"
@@ -213,6 +244,7 @@ final class TVOSDeviceControllerTests: XCTestCase {
                     case updatedWDABundleId = "appium:updatedWDABundleId"
                     case usePrebuiltWDA = "appium:usePrebuiltWDA"
                     case derivedDataPath = "appium:derivedDataPath"
+                    case webDriverAgentUrl = "appium:webDriverAgentUrl"
                 }
             }
             let alwaysMatch: AlwaysMatch

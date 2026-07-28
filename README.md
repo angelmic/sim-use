@@ -161,6 +161,8 @@ export SIM_USE_APPIUM_URL=http://127.0.0.1:4725
 export SIM_USE_TVOS_BUNDLE_ID=com.example.TVApp
 ```
 
+For a physical Apple TV on tvOS 17 or newer, keep a RemoteXPC tunnel running and set `SIM_USE_TVOS_WDA_BUNDLE_ID` to the already-installed, correctly signed WDA product id (without `.xctrunner`). With a target bundle id present, sim-use starts that runner through XCTest/testmanagerd, keeps one health-checked supervisor per UDID, and gives Appium an attach-only URL. This avoids a recurring host build/sign pass. State and timestamps live in `~/.sim-use/<UDID>/tvos-wda-supervisor.json`; set `SIM_USE_TVOS_WDA_SUPERVISOR=0` only to use the xcodebuild repair path.
+
 
 ## Commands
 
@@ -396,12 +398,12 @@ sim-use daemon stop --all
 SIM_USE_NO_DAEMON=1 sim-use ui --device $UDID
 ```
 
-Daemons self-exit after 600 s of idle and log to `/tmp/sim-use-<uid>/<UDID>.log`. Streaming commands (`screenshot`, `record-video`, `stream-video`) always run in-process regardless. tvOS commands also stay in-process because each operation owns a short-lived Appium session.
+Daemons self-exit after 600 s of idle and log to `/tmp/sim-use-<uid>/<UDID>.log`. Streaming commands (`screenshot`, `record-video`, `stream-video`) always run in-process regardless. tvOS commands also stay in-process because each operation owns a short-lived Appium session. On modern physical Apple TV, only the Appium session is short-lived: the per-UDID XCTest/WDA supervisor remains healthy for reuse (seven days by default).
 
 
 ## Architecture
 
-sim-use drives iOS Simulators through the lower-level XCFrameworks of Facebook's [idb](https://github.com/facebook/idb) (statically linked), Apple's Accessibility APIs, and the simulator HID pipeline. tvOS Simulator uses Appium's XCUITest driver for WebDriver source, screenshots, and Siri Remote button events; every command creates and closes its own session. Android devices are driven through an on-device bridge APK that exposes the AccessibilityService tree and input injection over HTTP, tunnelled via `adb forward`. Everything ships as a single binary; every command supports `--json` for machine consumption.
+sim-use drives iOS Simulators through the lower-level XCFrameworks of Facebook's [idb](https://github.com/facebook/idb) (statically linked), Apple's Accessibility APIs, and the simulator HID pipeline. tvOS uses Appium's XCUITest driver for WebDriver source, screenshots, and Siri Remote button events; every command creates and closes its own Appium session, while modern physical Apple TV reuses a health-checked XCTest/WDA supervisor. Android devices are driven through an on-device bridge APK that exposes the AccessibilityService tree and input injection over HTTP, tunnelled via `adb forward`. Everything ships as a single binary; every command supports `--json` for machine consumption.
 
 
 ## Viewer
