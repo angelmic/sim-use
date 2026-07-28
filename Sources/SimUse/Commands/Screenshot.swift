@@ -35,6 +35,11 @@ struct Screenshot: SimUseExecutableCommand {
     @OptionGroup var device: DeviceOptions
     @OptionGroup var tvosTarget: TVOSTargetOptions
 
+    /// The shared target option is also the physical-iOS app target. Keep
+    /// this named seam visible to tests so the device branch cannot silently
+    /// drop a parsed `--bundle-id` again.
+    var appleDeviceBundleId: String? { tvosTarget.bundleId }
+
     @Option(help: "Output PNG file path. Defaults to 'Simulator Screenshot - <device name> - <timestamp>.png' in the current directory.")
     var output: String?
 
@@ -126,7 +131,10 @@ struct Screenshot: SimUseExecutableCommand {
     /// Physical iOS/tvOS device: capture through the Appium session (the
     /// caps assembler picks the right WDA path per family) and save the PNG.
     private func executeAppleDevice() async throws -> ExecutionResult {
-        let png = try await AppleDeviceController.live().screenshot(udid: device.resolved)
+        let png = try await AppleDeviceController.live().screenshot(
+            udid: device.resolved,
+            bundleId: appleDeviceBundleId
+        )
         return try write(png, defaultLabel: "Device Screenshot", id: device.resolved)
     }
 
