@@ -2,6 +2,11 @@
 import CryptoKit
 import Foundation
 import SimUseCore
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
 
 /// Per-physical-device WebDriverAgent build/signing cache.
 ///
@@ -184,6 +189,27 @@ public struct WDADeviceCache: Sendable {
         }
     }
 
+    public enum RepairLockError: Error, LocalizedError, Sendable {
+        case openFailed(path: String, code: Int32)
+        case acquireFailed(path: String, code: Int32)
+        case timedOut(path: String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .openFailed(let path, let code):
+                return "Could not open WDA repair lock at \(path): \(Self.message(for: code))"
+            case .acquireFailed(let path, let code):
+                return "Could not acquire WDA repair lock at \(path): \(Self.message(for: code))"
+            case .timedOut(let path):
+                return "Timed out waiting for another sim-use process to finish WDA repair at \(path)"
+            }
+        }
+
+        private static func message(for code: Int32) -> String {
+            String(cString: strerror(code))
+        }
+    }
+
     public typealias MetadataProvider = @Sendable () throws -> HostMetadata
     public typealias ArtifactInspector = @Sendable (URL) throws -> Artifact
     public typealias Clock = @Sendable () -> Date
@@ -259,7 +285,24 @@ public struct WDADeviceCache: Sendable {
         directory(for: udid).appendingPathComponent("wda-derived-data", isDirectory: true)
     }
 
+    public func repairLockFile(for udid: String) -> URL {
+        directory(for: udid).appendingPathComponent("wda-repair.lock")
+    }
+
     // MARK: - Plan / record
+
+    /// A cheap gate used before taking the per-device repair lock. The
+    /// expensive host fingerprint and artifact inspection remain inside
+    /// `plan`, after the lock is held.
+    public func canManage(
+        info: PhysicalDeviceInfo,
+        config: DeviceCapabilityConfig
+    ) -> Bool {
+        isEnabled
+            && (info.family == .ios || info.family == .tvos)
+            && info.isModern
+            && config.xcodeOrgId != nil
+    }
 
     public func plan(
         for info: PhysicalDeviceInfo,
@@ -276,10 +319,11 @@ public struct WDADeviceCache: Sendable {
                 runnerAppPath: runnerAppPath
             )
         }
-        // The current iOS ≥17 branch uses an already-installed WDA and
-        // never invokes xcodebuild. The host build cache is therefore only
-        // meaningful for modern physical tvOS sessions.
-        guard info.family == .tvos, info.isModern else {
+        // Both modern Apple families use the signed host artifact as their
+        // deterministic launch/repair source. A valid record selects
+        // test-without-building immediately; a miss uses the same stable
+        // DerivedData directory for one incremental build.
+        guard info.family == .ios || info.family == .tvos, info.isModern else {
             return miss(
                 .strategyNotCacheable,
                 fingerprint: nil,
@@ -307,16 +351,17 @@ public struct WDADeviceCache: Sendable {
                 runnerAppPath: runnerAppPath
             )
         }
+        let isTVOS = info.family == .tvos
         let fingerprint = Fingerprint(
             deviceUDID: info.udid,
-            platformName: "tvOS",
+            platformName: isTVOS ? "tvOS" : "iOS",
             platformVersion: info.osVersion ?? info.osMajorVersion.map(String.init) ?? "unknown",
             xcodeBuild: metadata.xcodeBuild,
             wdaSourceSHA256: metadata.wdaSourceSHA256,
             developmentTeam: team,
-            bundleIdentifier: config.tvosWDABundleId,
+            bundleIdentifier: isTVOS ? config.tvosWDABundleId : config.iosWDABundleId,
             signingIdentity: config.xcodeSigningId,
-            scheme: "WebDriverAgentRunner_tvOS"
+            scheme: isTVOS ? "WebDriverAgentRunner_tvOS" : "WebDriverAgentRunner"
         )
 
         let record: Record
@@ -467,6 +512,49 @@ public struct WDADeviceCache: Sendable {
         if FileManager.default.fileExists(atPath: url.path) {
             try FileManager.default.removeItem(at: url)
         }
+    }
+
+    /// Serialize the complete plan → launch/repair → record transition for
+    /// one device across independent sim-use processes. BSD `flock` is
+    /// released by the kernel if a process exits, so a crashed xcodebuild
+    /// cannot leave a permanent stale mutex.
+    public func withExclusiveRepairLock<Result>(
+        for udid: String,
+        operation: () async throws -> Result
+    ) async throws -> Result {
+        let directory = directory(for: udid)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let lockFile = repairLockFile(for: udid)
+        let descriptor = lockFile.path.withCString {
+            open($0, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+        }
+        guard descriptor >= 0 else {
+            throw RepairLockError.openFailed(path: lockFile.path, code: errno)
+        }
+        defer {
+            _ = flock(descriptor, LOCK_UN)
+            _ = close(descriptor)
+        }
+        _ = fcntl(descriptor, F_SETFD, FD_CLOEXEC)
+
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(180))
+        while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+            let code = errno
+            guard code == EWOULDBLOCK || code == EAGAIN else {
+                throw RepairLockError.acquireFailed(path: lockFile.path, code: code)
+            }
+            guard clock.now < deadline else {
+                throw RepairLockError.timedOut(path: lockFile.path)
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+
+        return try await operation()
     }
 
     // MARK: - Private cache helpers

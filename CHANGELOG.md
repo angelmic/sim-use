@@ -28,13 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Physical-device discovery keeps rich `devicectl` metadata while treating a
     matching live `idevice_id -l` USB attachment as connected. This avoids a
     false negative when CoreDevice's local-network row remains at `connecting`.
-  - Modern physical tvOS sessions keep a signed-WDA record and stable
+  - Modern physical Apple devices keep a signed-WDA record and stable
     DerivedData directory per UDID under `~/.sim-use/<UDID>/`. An exact
     device/Xcode/WDA-source/signing fingerprint plus a valid, unexpired runner
-    selects Appium's `usePrebuiltWDA` (`test-without-building`) path; a miss
-    keeps the same DerivedData for an incremental build. A failed prebuilt
-    session creation invalidates only the record and repairs once, while
-    post-creation UI/remote operations are never retried. Set
+    selects Appium's `usePrebuiltWDA` (`test-without-building`) path before
+    session creation; a miss keeps the same DerivedData for one incremental
+    build without first paying Appium's 60-second preinstalled-runner timeout.
+    A rejected prebuilt artifact invalidates only the record and repairs once.
+    A per-UDID cross-process lock prevents concurrent CLIs from building or
+    rewriting the same cache simultaneously. Post-creation UI/remote
+    operations are never retried. Set
     `SIM_USE_WDA_CACHE=0` to disable the optimization or
     `SIM_USE_WDA_SOURCE_ROOT` when Appium's WDA sources live outside its
     standard home.
@@ -53,6 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Modern physical iPhones now recover automatically from a missing, expired,
+  or otherwise unlaunchable WDA. With signing inputs configured, the controller
+  uses the verified per-UDID prebuilt artifact immediately, or performs one
+  incremental build/sign repair when the cache is absent or stale, instead of
+  first waiting for a doomed preinstalled-runner launch timeout.
 - Apple Simulator platform routing reads CoreSimulator's per-device `device.plist` (~1 ms) instead of forking `simctl list devices -j` (hundreds of ms) in every CLI invocation — `ui`, `screenshot`, and `record-video` lose a per-call fork, and long-lived daemons now see simulators created after they spawned. The simctl catalog remains as a safety net for unreadable plists (devices in a custom `--set` are visible to neither source and keep the historical iOS routing), and a fallback failure prints a warning instead of silently routing tvOS devices to the iOS backend.
 - Touch/typing/recording verbs aimed at a tvOS Simulator fail in-process with the focus-navigation hint instead of first auto-spawning a per-UDID daemon that can never serve them.
 - A failed Appium session DELETE no longer fails a tvOS command whose work had already completed; teardown is best-effort with a stderr warning.

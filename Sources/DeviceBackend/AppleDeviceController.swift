@@ -29,19 +29,22 @@ public struct AppleDeviceController: Sendable {
     private let preflight: DevicePreflight
     private let config: DeviceCapabilityConfig
     private let cacheHome: URL
+    private let wdaCache: WDADeviceCache
     private let activationSettler: @Sendable () async throws -> Void
 
     public init(
         client: AppiumClient,
         preflight: DevicePreflight,
         config: DeviceCapabilityConfig,
-        cacheHome: URL = OutlineCache.homeDirectory
+        cacheHome: URL = OutlineCache.homeDirectory,
+        wdaCache: WDADeviceCache = .disabled()
     ) {
         self.init(
             client: client,
             preflight: preflight,
             config: config,
             cacheHome: cacheHome,
+            wdaCache: wdaCache,
             activationSettler: {
                 // `mobile: activateApp` returns while iOS is still animating
                 // from SpringBoard. A command issued immediately afterwards
@@ -56,12 +59,14 @@ public struct AppleDeviceController: Sendable {
         preflight: DevicePreflight,
         config: DeviceCapabilityConfig,
         cacheHome: URL,
+        wdaCache: WDADeviceCache = .disabled(),
         activationSettler: @escaping @Sendable () async throws -> Void
     ) {
         self.client = client
         self.preflight = preflight
         self.config = config
         self.cacheHome = cacheHome
+        self.wdaCache = wdaCache
         self.activationSettler = activationSettler
     }
 
@@ -71,7 +76,8 @@ public struct AppleDeviceController: Sendable {
         AppleDeviceController(
             client: try .live(environment: environment),
             preflight: try .live(environment: environment),
-            config: .live(environment: environment)
+            config: .live(environment: environment),
+            wdaCache: .live(environment: environment)
         )
     }
 
@@ -84,7 +90,11 @@ public struct AppleDeviceController: Sendable {
     ) async throws -> DescribeUIResult {
         let info = try await preflight.run(udid: udid)
         let caps = try capabilities(for: info, bundleId: bundleId)
-        let result = try await withActivatedSession(capabilities: caps, bundleId: bundleId) { session in
+        let result = try await withActivatedSession(
+            info: info,
+            capabilities: caps,
+            bundleId: bundleId
+        ) { session in
             try DeviceOutlineRenderer.render(source: try await session.source(), includeRaw: includeRaw)
         }
         // Persist the alias cache so `tap @N` / `#N` resolve cross-command,
@@ -116,7 +126,11 @@ public struct AppleDeviceController: Sendable {
 
         switch target {
         case .point(let x, let y):
-            try await withActivatedSession(capabilities: caps, bundleId: bundleId) { session in
+            try await withActivatedSession(
+                info: info,
+                capabilities: caps,
+                bundleId: bundleId
+            ) { session in
                 try await session.performPointerActions(PointerAction.tap(x: x, y: y, holdMs: holdMs))
             }
             return (x, y)
@@ -124,7 +138,11 @@ public struct AppleDeviceController: Sendable {
         case .cachedAlias(let raw):
             // Cache-backed: resolve the center before opening the session.
             let resolved = try OutlineAliasResolver.resolve(raw, udid: udid, home: cacheHome)
-            try await withActivatedSession(capabilities: caps, bundleId: bundleId) { session in
+            try await withActivatedSession(
+                info: info,
+                capabilities: caps,
+                bundleId: bundleId
+            ) { session in
                 try await session.performPointerActions(
                     PointerAction.tap(x: resolved.point.x, y: resolved.point.y, holdMs: holdMs)
                 )
@@ -132,7 +150,11 @@ public struct AppleDeviceController: Sendable {
             return resolved.point
 
         case .selector(let selector):
-            return try await withActivatedSession(capabilities: caps, bundleId: bundleId) { session in
+            return try await withActivatedSession(
+                info: info,
+                capabilities: caps,
+                bundleId: bundleId
+            ) { session in
                 let result = try DeviceOutlineRenderer.render(source: try await session.source(), includeRaw: false)
                 let entry = try DeviceSelectorResolver.resolve(selector, in: result.entries, screen: result.screen)
                 let point = DeviceSelectorResolver.center(of: entry)
@@ -154,7 +176,11 @@ public struct AppleDeviceController: Sendable {
         let info = try await preflight.run(udid: udid)
         try requireIOS(info, command: "swipe")
         let caps = try capabilities(for: info, bundleId: bundleId)
-        try await withActivatedSession(capabilities: caps, bundleId: bundleId) { session in
+        try await withActivatedSession(
+            info: info,
+            capabilities: caps,
+            bundleId: bundleId
+        ) { session in
             try await session.performPointerActions(
                 PointerAction.swipe(fromX: from.x, fromY: from.y, toX: to.x, toY: to.y, durationMs: durationMs)
             )
@@ -171,7 +197,11 @@ public struct AppleDeviceController: Sendable {
         let info = try await preflight.run(udid: udid)
         try requireIOS(info, command: "type")
         let caps = try capabilities(for: info, bundleId: bundleId)
-        try await withActivatedSession(capabilities: caps, bundleId: bundleId) { session in
+        try await withActivatedSession(
+            info: info,
+            capabilities: caps,
+            bundleId: bundleId
+        ) { session in
             let element = try await session.activeElement()
             try await session.sendKeys(text, elementID: element)
         }
@@ -188,7 +218,11 @@ public struct AppleDeviceController: Sendable {
         try requireIOS(info, command: "paste")
         let caps = try capabilities(for: info, bundleId: bundleId)
         let encoded = Data(text.utf8).base64EncodedString()
-        try await withActivatedSession(capabilities: caps, bundleId: bundleId) { session in
+        try await withActivatedSession(
+            info: info,
+            capabilities: caps,
+            bundleId: bundleId
+        ) { session in
             // Seed the device pasteboard (bypasses IME composition), then
             // deliver the text into the focused field. WDA has no
             // hardware-Cmd+V on a physical device, so the send is what
@@ -213,7 +247,11 @@ public struct AppleDeviceController: Sendable {
     ) async throws -> Data {
         let info = try await preflight.run(udid: udid)
         let caps = try capabilities(for: info, bundleId: bundleId)
-        return try await withActivatedSession(capabilities: caps, bundleId: bundleId) { session in
+        return try await withActivatedSession(
+            info: info,
+            capabilities: caps,
+            bundleId: bundleId
+        ) { session in
             try await session.screenshot()
         }
     }
@@ -228,17 +266,141 @@ public struct AppleDeviceController: Sendable {
     /// its current screen with `mobile: activateApp` (activate — not launch)
     /// before running the verb, so navigation from a prior command survives.
     private func withActivatedSession<Result>(
+        info: PhysicalDeviceInfo,
         capabilities: AppiumCapabilities,
         bundleId: String?,
         operation: @escaping (AppiumSession) async throws -> Result
     ) async throws -> Result {
-        try await client.withSession(capabilities: capabilities) { session in
+        guard info.family == .ios,
+              wdaCache.canManage(info: info, config: config)
+        else {
+            return try await runInstalledSession(
+                capabilities: capabilities,
+                bundleId: bundleId,
+                operation: operation
+            )
+        }
+
+        return try await wdaCache.withExclusiveRepairLock(for: info.udid) {
+            // Re-plan only after the device lock is held. A process that
+            // waited behind another repair sees the record that process
+            // just committed and goes straight to test-without-building.
+            let plan = wdaCache.plan(for: info, config: config)
+
+            do {
+                return try await runActivatedSession(
+                    capabilities: repairCapabilities(
+                        for: info,
+                        bundleId: bundleId,
+                        plan: plan,
+                        usePrebuiltWDA: plan.usePrebuiltWDA
+                    ),
+                    bundleId: bundleId,
+                    onSessionCreated: { recordCacheSuccess(plan) },
+                    operation: operation
+                )
+            } catch let cachedError as AppiumSessionCreationError {
+                // A locally valid prebuilt app can still be rejected after a
+                // device trust/profile change. Invalidate its trust record
+                // and spend one final incremental build/sign attempt. A
+                // cache miss already used that build path, so it stops here.
+                guard plan.usePrebuiltWDA,
+                      Self.isRecoverableWDAFailure(cachedError.underlying)
+                else {
+                    throw cachedError.underlying
+                }
+                try? wdaCache.invalidate(udid: info.udid)
+                do {
+                    return try await runActivatedSession(
+                        capabilities: repairCapabilities(
+                            for: info,
+                            bundleId: bundleId,
+                            plan: plan,
+                            usePrebuiltWDA: false
+                        ),
+                        bundleId: bundleId,
+                        onSessionCreated: { recordCacheSuccess(plan) },
+                        operation: operation
+                    )
+                } catch let repairError as AppiumSessionCreationError {
+                    throw repairError.underlying
+                }
+            }
+        }
+    }
+
+    private func runInstalledSession<Result>(
+        capabilities: AppiumCapabilities,
+        bundleId: String?,
+        operation: @escaping (AppiumSession) async throws -> Result
+    ) async throws -> Result {
+        do {
+            return try await runActivatedSession(
+                capabilities: capabilities,
+                bundleId: bundleId,
+                onSessionCreated: {},
+                operation: operation
+            )
+        } catch let creationError as AppiumSessionCreationError {
+            throw creationError.underlying
+        }
+    }
+
+    private func runActivatedSession<Result>(
+        capabilities: AppiumCapabilities,
+        bundleId: String?,
+        onSessionCreated: @escaping @Sendable () -> Void,
+        operation: @escaping (AppiumSession) async throws -> Result
+    ) async throws -> Result {
+        try await client.withSession(
+            capabilities: capabilities,
+            classifyCreationFailure: true
+        ) { session in
+            onSessionCreated()
             if let bundleId = bundleId?.trimmingCharacters(in: .whitespacesAndNewlines), !bundleId.isEmpty {
                 try await session.execute(script: "mobile: activateApp", args: [["bundleId": bundleId]])
                 try await activationSettler()
             }
             return try await operation(session)
         }
+    }
+
+    private func repairCapabilities(
+        for info: PhysicalDeviceInfo,
+        bundleId: String?,
+        plan: WDADeviceCache.Plan,
+        usePrebuiltWDA: Bool
+    ) throws -> AppiumCapabilities {
+        var capabilities = try self.capabilities(for: info, bundleId: bundleId)
+        capabilities.usePreinstalledWDA = nil
+        capabilities.usePrebuiltWDA = usePrebuiltWDA ? true : nil
+        capabilities.derivedDataPath = plan.derivedDataPath.path
+        capabilities.xcodeOrgId = config.xcodeOrgId
+        capabilities.xcodeSigningId = config.xcodeSigningId
+        return capabilities
+    }
+
+    private func recordCacheSuccess(_ plan: WDADeviceCache.Plan) {
+        do {
+            try wdaCache.recordSuccessfulLaunch(plan)
+        } catch {
+            // The device verb succeeded. The timestamp/cache is an
+            // optimization and must never reverse that result.
+            FileHandle.standardError.write(Data(
+                "warning: could not update WDA signing cache: \(error.localizedDescription)\n".utf8
+            ))
+        }
+    }
+
+    private static func isRecoverableWDAFailure(_ error: Error) -> Bool {
+        let message = error.localizedDescription.lowercased()
+        return [
+            "webdriveragent",
+            "xcodebuild",
+            "test-without-building",
+            "prebuilt wda",
+            "preinstalled runner",
+        ].contains { message.contains($0) }
     }
 
     /// Coordinate/keyboard verbs have no meaning on focus-driven tvOS —

@@ -37,10 +37,9 @@ public struct AppiumCapabilities: Sendable, Encodable {
     /// Nil (driver default) off the device path.
     public var shouldTerminateApp: Bool?
     /// Apple Developer Team id for the xcodebuild WDA flow. Physical tvOS
-    /// 17+/26 has no `usePreinstalledWDA` path: Appium builds and launches
-    /// WDA via xcodebuild with automatic signing, which needs the Team id
-    /// (a 10-character account identifier) and a signing identity. Unused by
-    /// the Simulator and the iOS preinstalled-WDA paths, so it stays nil there.
+    /// uses it on its build path; modern iOS adds it to its verified
+    /// prebuilt or automatic build/sign path. The Simulator and an iOS
+    /// installed-WDA fallback without signing config leave it nil.
     public var xcodeOrgId: String?
     public var xcodeSigningId: String?
 

@@ -43,6 +43,21 @@ final class WDADeviceCacheTests: XCTestCase {
         XCTAssertEqual(second.fingerprint, first.fingerprint)
     }
 
+    func testModernIOSPlanUsesIOSFingerprintAndRunnerProduct() {
+        let home = makeHome()
+        let cache = makeCache(home: home)
+
+        let plan = cache.plan(for: iosInfo(), config: iosConfig())
+
+        XCTAssertEqual(plan.missReason, .recordMissing)
+        XCTAssertEqual(plan.fingerprint?.platformName, "iOS")
+        XCTAssertEqual(plan.fingerprint?.bundleIdentifier, "com.catchplay.WebDriverAgentRunner")
+        XCTAssertEqual(plan.fingerprint?.scheme, "WebDriverAgentRunner")
+        XCTAssertTrue(plan.runnerAppPath.path.hasSuffix(
+            "Debug-iphoneos/WebDriverAgentRunner-Runner.app"
+        ))
+    }
+
     func testFreshTimestampCannotHideFingerprintChange() throws {
         let home = makeHome()
         let original = makeCache(home: home)
@@ -139,6 +154,55 @@ final class WDADeviceCacheTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: plan.derivedDataPath.path))
     }
 
+    func testRepairLockSerializesWithAnotherProcessForTheSameDevice() async throws {
+        let home = makeHome()
+        let cache = makeCache(home: home)
+        let lockFile = cache.repairLockFile(for: iosInfo().udid)
+        let readyFile = home.appendingPathComponent("child-holds-lock")
+        try FileManager.default.createDirectory(
+            at: lockFile.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        process.arguments = [
+            "-c",
+            """
+            import fcntl, pathlib, sys, time
+            lock_path, ready_path = sys.argv[1], sys.argv[2]
+            with open(lock_path, "a+") as handle:
+                fcntl.flock(handle, fcntl.LOCK_EX)
+                pathlib.Path(ready_path).write_text("locked")
+                time.sleep(1.0)
+            """,
+            lockFile.path,
+            readyFile.path,
+        ]
+        try process.run()
+        defer {
+            if process.isRunning { process.terminate() }
+            process.waitUntilExit()
+        }
+
+        let waitDeadline = Date().addingTimeInterval(3)
+        while !FileManager.default.fileExists(atPath: readyFile.path), Date() < waitDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: readyFile.path),
+            "the child process must acquire the fixture lock"
+        )
+
+        let startedAt = Date()
+        try await cache.withExclusiveRepairLock(for: iosInfo().udid) {}
+        XCTAssertGreaterThanOrEqual(
+            Date().timeIntervalSince(startedAt),
+            0.5,
+            "a second process must wait instead of entering the same DerivedData repair"
+        )
+    }
+
     func testLiveMetadataFingerprintsConfiguredWDASourceInsteadOfFallingBackUnavailable() throws {
         let home = makeHome()
         let source = home.appendingPathComponent("fixture-wda", isDirectory: true)
@@ -211,9 +275,27 @@ final class WDADeviceCacheTests: XCTestCase {
         )
     }
 
+    private func iosInfo() -> PhysicalDeviceInfo {
+        PhysicalDeviceInfo(
+            udid: "00008140-00096D5C0CEA801C",
+            family: .ios,
+            osMajorVersion: 18,
+            tunnelState: "connected",
+            osVersion: "18.7.8"
+        )
+    }
+
     private func tvConfig() -> DeviceCapabilityConfig {
         DeviceCapabilityConfig(
             tvosWDABundleId: "com.catchplay.wda",
+            xcodeOrgId: "MKK9DM2XD9",
+            xcodeSigningId: "Apple Development"
+        )
+    }
+
+    private func iosConfig() -> DeviceCapabilityConfig {
+        DeviceCapabilityConfig(
+            iosWDABundleId: "com.catchplay.WebDriverAgentRunner",
             xcodeOrgId: "MKK9DM2XD9",
             xcodeSigningId: "Apple Development"
         )

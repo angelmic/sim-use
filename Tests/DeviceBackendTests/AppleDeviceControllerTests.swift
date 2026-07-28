@@ -32,6 +32,8 @@ final class AppleDeviceControllerTests: XCTestCase {
     private func makeController(
         _ responses: [Result<AppiumResponse, Error>],
         device: Device,
+        config: DeviceCapabilityConfig = DeviceCapabilityConfig(),
+        wdaCache: WDADeviceCache = .disabled(),
         activationSettler: @escaping @Sendable () async throws -> Void = {}
     ) -> (AppleDeviceController, MockTransport) {
         let transport = MockTransport(responses: responses)
@@ -45,8 +47,9 @@ final class AppleDeviceControllerTests: XCTestCase {
                 statusTransport: transport,
                 infoResolver: DeviceInfoResolver(provider: { [device] })
             ),
-            config: DeviceCapabilityConfig(),
+            config: config,
             cacheHome: home,
+            wdaCache: wdaCache,
             activationSettler: activationSettler
         )
         return (controller, transport)
@@ -247,6 +250,188 @@ final class AppleDeviceControllerTests: XCTestCase {
         ])
     }
 
+    // MARK: - Per-device WDA signing/build recovery
+
+    func testMissingIOSCacheBuildsThroughPerDeviceCacheWithoutWaitingForPreinstalledTimeout() async throws {
+        let (cache, plan) = makeIOSCache()
+        // Model the artifact Appium's repair build leaves in the stable
+        // per-device DerivedData directory, so the successful session can
+        // persist a verified signing record.
+        try FileManager.default.createDirectory(at: plan.runnerAppPath, withIntermediateDirectories: true)
+        let config = iosSigningConfig()
+        let (controller, transport) = makeController(
+            [
+                statusOK(),
+                sessionResponse(id: "repair-session"),
+                valueResponse(source),
+                emptyOK(),
+            ],
+            device: iPhone(),
+            config: config,
+            wdaCache: cache
+        )
+
+        _ = try await controller.describeUI(udid: iPhoneUDID, includeRaw: false)
+
+        let requests = await transport.recordedRequests()
+        let sessionRequests = requests.filter { $0.method == "POST" && $0.url.path == "/session" }
+        XCTAssertEqual(sessionRequests.count, 1, "a known cache miss must go straight to one incremental repair")
+        let repair = try decodeSessionCaps(sessionRequests[0])
+        XCTAssertNil(repair.capabilities.alwaysMatch.usePreinstalledWDA)
+        XCTAssertNil(repair.capabilities.alwaysMatch.usePrebuiltWDA)
+        XCTAssertEqual(repair.capabilities.alwaysMatch.derivedDataPath, plan.derivedDataPath.path)
+        XCTAssertEqual(repair.capabilities.alwaysMatch.xcodeOrgId, "MKK9DM2XD9")
+        XCTAssertEqual(repair.capabilities.alwaysMatch.xcodeSigningId, "Apple Development")
+        XCTAssertEqual(repair.capabilities.alwaysMatch.updatedWDABundleId, "com.catchplay.WebDriverAgentRunner")
+        XCTAssertNoThrow(try cache.readRecord(for: iPhoneUDID))
+    }
+
+    func testUnavailableHostMetadataStillBuildsWithoutPreinstalledTimeout() async throws {
+        let home = makeTempHome()
+        homesToClean.append(home)
+        let cache = WDADeviceCache(
+            home: home,
+            metadataProvider: {
+                throw WDADeviceCache.ArtifactValidationError.metadataMissing("xcode build")
+            },
+            artifactInspector: { throw WDADeviceCache.ArtifactValidationError.missing($0.path) }
+        )
+        let (controller, transport) = makeController(
+            [
+                statusOK(),
+                sessionResponse(id: "metadata-repair-session"),
+                valueResponse(source),
+                emptyOK(),
+            ],
+            device: iPhone(),
+            config: iosSigningConfig(),
+            wdaCache: cache
+        )
+
+        _ = try await controller.describeUI(udid: iPhoneUDID, includeRaw: false)
+
+        let requests = await transport.recordedRequests()
+        let sessionRequests = requests.filter { $0.method == "POST" && $0.url.path == "/session" }
+        XCTAssertEqual(sessionRequests.count, 1)
+        let repair = try decodeSessionCaps(try XCTUnwrap(sessionRequests.first))
+        XCTAssertNil(repair.capabilities.alwaysMatch.usePreinstalledWDA)
+        XCTAssertNil(repair.capabilities.alwaysMatch.usePrebuiltWDA)
+        XCTAssertEqual(
+            repair.capabilities.alwaysMatch.derivedDataPath,
+            cache.derivedDataPath(for: iPhoneUDID).path
+        )
+        XCTAssertEqual(repair.capabilities.alwaysMatch.xcodeOrgId, "MKK9DM2XD9")
+    }
+
+    func testValidIOSSigningCacheUsesPrebuiltArtifactWithoutWaitingForPreinstalledTimeout() async throws {
+        let (cache, plan) = makeIOSCache()
+        try FileManager.default.createDirectory(at: plan.runnerAppPath, withIntermediateDirectories: true)
+        _ = try XCTUnwrap(cache.recordSuccessfulLaunch(plan))
+        let (controller, transport) = makeController(
+            [
+                statusOK(),
+                sessionResponse(id: "prebuilt-session"),
+                valueResponse(source),
+                emptyOK(),
+            ],
+            device: iPhone(),
+            config: iosSigningConfig(),
+            wdaCache: cache
+        )
+
+        _ = try await controller.describeUI(udid: iPhoneUDID, includeRaw: false)
+
+        let requests = await transport.recordedRequests()
+        let sessionRequests = requests.filter { $0.method == "POST" && $0.url.path == "/session" }
+        XCTAssertEqual(sessionRequests.count, 1)
+        let cached = try decodeSessionCaps(sessionRequests[0])
+        XCTAssertEqual(cached.capabilities.alwaysMatch.usePrebuiltWDA, true)
+        XCTAssertNil(cached.capabilities.alwaysMatch.usePreinstalledWDA)
+        XCTAssertEqual(cached.capabilities.alwaysMatch.derivedDataPath, plan.derivedDataPath.path)
+    }
+
+    func testRejectedIOSPrebuiltArtifactFallsBackToOneIncrementalBuild() async throws {
+        let (cache, plan) = makeIOSCache()
+        try FileManager.default.createDirectory(at: plan.runnerAppPath, withIntermediateDirectories: true)
+        _ = try XCTUnwrap(cache.recordSuccessfulLaunch(plan))
+        let (controller, transport) = makeController(
+            [
+                statusOK(),
+                webdriverError("test-without-building failed for prebuilt WDA"),
+                sessionResponse(id: "rebuilt-session"),
+                valueResponse(source),
+                emptyOK(),
+            ],
+            device: iPhone(),
+            config: iosSigningConfig(),
+            wdaCache: cache
+        )
+
+        _ = try await controller.describeUI(udid: iPhoneUDID, includeRaw: false)
+
+        let requests = await transport.recordedRequests()
+        let sessionRequests = requests.filter { $0.method == "POST" && $0.url.path == "/session" }
+        XCTAssertEqual(sessionRequests.count, 2, "prebuilt, then one full incremental build")
+        let prebuilt = try decodeSessionCaps(sessionRequests[0])
+        let rebuild = try decodeSessionCaps(sessionRequests[1])
+        XCTAssertEqual(prebuilt.capabilities.alwaysMatch.usePrebuiltWDA, true)
+        XCTAssertNil(rebuild.capabilities.alwaysMatch.usePrebuiltWDA)
+        XCTAssertNil(rebuild.capabilities.alwaysMatch.usePreinstalledWDA)
+        XCTAssertEqual(rebuild.capabilities.alwaysMatch.derivedDataPath, plan.derivedDataPath.path)
+        XCTAssertNoThrow(try cache.readRecord(for: iPhoneUDID))
+    }
+
+    func testIOSWithoutSigningConfigKeepsPreinstalledFastPathWithoutMetadataInspection() async throws {
+        let probe = SynchronousCountProbe()
+        let cache = WDADeviceCache(
+            metadataProvider: {
+                probe.increment()
+                throw WDADeviceCache.ArtifactValidationError.metadataMissing("unexpected inspection")
+            },
+            artifactInspector: { throw WDADeviceCache.ArtifactValidationError.missing($0.path) }
+        )
+        let (controller, _) = makeController(
+            [statusOK(), sessionResponse(), valueResponse(source), emptyOK()],
+            device: iPhone(),
+            config: DeviceCapabilityConfig(),
+            wdaCache: cache
+        )
+
+        _ = try await controller.describeUI(udid: iPhoneUDID, includeRaw: false)
+
+        XCTAssertEqual(probe.value, 0, "without signing config the installed-WDA path must remain zero-overhead")
+    }
+
+    func testIOSOperationFailureAfterSessionCreationNeverTriggersSigningRepair() async {
+        let (cache, plan) = makeIOSCache()
+        try? FileManager.default.createDirectory(at: plan.runnerAppPath, withIntermediateDirectories: true)
+        _ = try? cache.recordSuccessfulLaunch(plan)
+        let (controller, transport) = makeController(
+            [
+                statusOK(),
+                sessionResponse(),
+                webdriverError("WebDriverAgent source failed after the WDA session was already created"),
+                emptyOK(),
+            ],
+            device: iPhone(),
+            config: iosSigningConfig(),
+            wdaCache: cache
+        )
+
+        do {
+            _ = try await controller.describeUI(udid: iPhoneUDID, includeRaw: false)
+            XCTFail("expected source failure")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("WebDriverAgent source failed"))
+        }
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(
+            requests.filter { $0.method == "POST" && $0.url.path == "/session" }.count,
+            1,
+            "an operation must never be replayed after session creation"
+        )
+    }
+
     // MARK: - tvOS family guard
 
     func testCoordinateVerbsRejectTVOSDeviceBeforeSession() async {
@@ -268,6 +453,46 @@ final class AppleDeviceControllerTests: XCTestCase {
 
     private func decodeActions(_ request: AppiumRequest) throws -> ActionsProbe {
         try JSONDecoder().decode(ActionsProbe.self, from: try XCTUnwrap(request.body))
+    }
+
+    private func decodeSessionCaps(_ request: AppiumRequest) throws -> SigningCapsProbe {
+        try JSONDecoder().decode(SigningCapsProbe.self, from: try XCTUnwrap(request.body))
+    }
+
+    private func iosSigningConfig() -> DeviceCapabilityConfig {
+        DeviceCapabilityConfig(
+            iosWDABundleId: "com.catchplay.WebDriverAgentRunner",
+            xcodeOrgId: "MKK9DM2XD9",
+            xcodeSigningId: "Apple Development"
+        )
+    }
+
+    private func makeIOSCache() -> (WDADeviceCache, WDADeviceCache.Plan) {
+        let home = makeTempHome()
+        homesToClean.append(home)
+        let cache = WDADeviceCache(
+            home: home,
+            metadataProvider: {
+                .init(xcodeBuild: "17C529", wdaSourceSHA256: "fixture-wda-source")
+            },
+            artifactInspector: { _ in
+                .init(
+                    bundleIdentifier: "com.catchplay.WebDriverAgentRunner.xctrunner",
+                    teamIdentifier: "MKK9DM2XD9",
+                    signedAt: Date(timeIntervalSince1970: 1_774_837_800),
+                    provisioningExpiresAt: Date(timeIntervalSince1970: 1_806_373_800)
+                )
+            },
+            now: { Date(timeIntervalSince1970: 1_774_924_200) }
+        )
+        let info = PhysicalDeviceInfo(
+            udid: iPhoneUDID,
+            family: .ios,
+            osMajorVersion: 18,
+            tunnelState: "connected",
+            osVersion: "18.7.8"
+        )
+        return (cache, cache.plan(for: info, config: iosSigningConfig()))
     }
 
     private struct ActionsProbe: Decodable {
@@ -306,6 +531,29 @@ final class AppleDeviceControllerTests: XCTestCase {
         let capabilities: Caps
     }
 
+    private struct SigningCapsProbe: Decodable {
+        struct Caps: Decodable {
+            struct AlwaysMatch: Decodable {
+                let usePreinstalledWDA: Bool?
+                let usePrebuiltWDA: Bool?
+                let derivedDataPath: String?
+                let xcodeOrgId: String?
+                let xcodeSigningId: String?
+                let updatedWDABundleId: String?
+                enum CodingKeys: String, CodingKey {
+                    case usePreinstalledWDA = "appium:usePreinstalledWDA"
+                    case usePrebuiltWDA = "appium:usePrebuiltWDA"
+                    case derivedDataPath = "appium:derivedDataPath"
+                    case xcodeOrgId = "appium:xcodeOrgId"
+                    case xcodeSigningId = "appium:xcodeSigningId"
+                    case updatedWDABundleId = "appium:updatedWDABundleId"
+                }
+            }
+            let alwaysMatch: AlwaysMatch
+        }
+        let capabilities: Caps
+    }
+
     private struct SendKeysProbe: Decodable { let text: String }
     private struct ExecuteProbe: Decodable {
         let script: String
@@ -318,5 +566,22 @@ private actor ActivationSettleProbe {
 
     func record() {
         count += 1
+    }
+}
+
+private final class SynchronousCountProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+
+    func increment() {
+        lock.lock()
+        count += 1
+        lock.unlock()
     }
 }

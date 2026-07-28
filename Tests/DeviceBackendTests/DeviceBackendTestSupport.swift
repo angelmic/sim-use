@@ -53,6 +53,15 @@ func statusOK() -> Result<AppiumResponse, Error> {
     .success(AppiumResponse(statusCode: 200, body: Data(#"{"value":{"ready":true}}"#.utf8)))
 }
 
+/// A W3C error envelope returned by Appium.
+func webdriverError(_ message: String) -> Result<AppiumResponse, Error> {
+    let escaped = message.replacingOccurrences(of: #"""#, with: #"\""#)
+    return .success(AppiumResponse(
+        statusCode: 500,
+        body: Data(#"{"value":{"error":"unknown error","message":"\#(escaped)"}}"#.utf8)
+    ))
+}
+
 /// A throwaway home directory so OutlineCache writes/reads stay off the real
 /// `~/.sim-use`. Caller deletes it in tearDown.
 func makeTempHome() -> URL {

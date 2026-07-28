@@ -29,14 +29,14 @@ public struct DeviceCapabilityConfig: Sendable, Equatable {
     /// supervisor appends `.xctrunner`; the xcodebuild repair path uses the
     /// same id. Override via `SIM_USE_TVOS_WDA_BUNDLE_ID`.
     public var tvosWDABundleId: String
-    /// Apple Developer **Team id** for the tvOS xcodebuild WDA build. No
-    /// universal default exists (it is account-specific), so it is Optional;
-    /// the tvOS device path fails fast when it is needed but unset. Supply
-    /// via `SIM_USE_XCODE_ORG_ID`.
+    /// Apple Developer **Team id** for an xcodebuild WDA build. tvOS needs it
+    /// on its build path; iOS uses it to enable its verified prebuilt cache
+    /// and automatic signing repair. No universal default exists, so callers
+    /// supply it via `SIM_USE_XCODE_ORG_ID`.
     public var xcodeOrgId: String?
-    /// Signing identity for the tvOS xcodebuild WDA build. "Apple
-    /// Development" is Apple's generic identity name (not account-specific),
-    /// so it is a safe default; override via `SIM_USE_XCODE_SIGNING_ID`.
+    /// Signing identity for an iOS/tvOS xcodebuild WDA build. "Apple
+    /// Development" is Apple's generic identity name (not account-specific);
+    /// override via `SIM_USE_XCODE_SIGNING_ID`.
     public var xcodeSigningId: String
     /// External WebDriverAgent URL for classic (≤16.x) devices. Nil unless
     /// `SIM_USE_WDA_URL` is set; a classic device without it fails fast.
@@ -84,9 +84,11 @@ public struct DeviceCapabilityConfig: Sendable, Equatable {
 /// Assembles the `AppiumCapabilities` for one physical-device session. The
 /// shape is a function of the resolved device facts, not a guess:
 ///
-///   * iOS 17+ — `usePreinstalledWDA` against the pre-signed on-device
-///     WDA, addressed by `updatedWDABundleId` plus independent local/remote
-///     WDA ports (P0-C2).
+///   * iOS 17+ — this builder emits the installed-WDA fallback, addressed by
+///     `updatedWDABundleId` plus independent local/remote WDA ports (P0-C2).
+///     When signing inputs are configured, `AppleDeviceController` replaces
+///     it before session creation with the verified per-device prebuilt or
+///     one-shot incremental build path.
 ///   * tvOS 17+/26 — normally attach-only to the XCTest-backed installed
 ///     runner owned by `TVOSWDASupervisor`. If that path is disabled or has
 ///     no target app, this builder retains the signed xcodebuild repair
@@ -171,7 +173,9 @@ public enum DeviceCapabilityBuilder {
             caps.xcodeSigningId = config.xcodeSigningId
         case .ios, .android:
             // .android never reaches here (PhysicalDeviceInfo rejects it);
-            // the iOS preinstalled-WDA path is the default modern branch.
+            // this is also the iOS fallback when no signing/cache policy is
+            // configured. AppleDeviceController replaces it before session
+            // creation when the per-device cache can manage the runner.
             caps.usePreinstalledWDA = true
             caps.updatedWDABundleId = config.iosWDABundleId
         }
