@@ -116,6 +116,7 @@ public enum DeviceCapabilityBuilder {
         let targetsApp = resolvedBundleId != nil
         var caps = AppiumCapabilities(
             platformName: platformName,
+            platformVersion: info.osVersion,
             automationName: "XCUITest",
             udid: info.udid,
             bundleId: resolvedBundleId,

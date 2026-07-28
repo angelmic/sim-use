@@ -12,7 +12,13 @@ final class DeviceCapabilitiesTests: XCTestCase {
     private let config = DeviceCapabilityConfig()
 
     private func info(family: Device.Platform, major: Int) -> PhysicalDeviceInfo {
-        PhysicalDeviceInfo(udid: "UDID-1", family: family, osMajorVersion: major, tunnelState: "connected")
+        PhysicalDeviceInfo(
+            udid: "UDID-1",
+            family: family,
+            osMajorVersion: major,
+            tunnelState: "connected",
+            osVersion: "\(major).5"
+        )
     }
 
     // MARK: - iOS modern (preinstalled WDA)
@@ -23,6 +29,8 @@ final class DeviceCapabilitiesTests: XCTestCase {
         )
         let wire = try encoded(caps)
         XCTAssertEqual(wire["platformName"] as? String, "iOS")
+        XCTAssertEqual(wire["appium:platformVersion"] as? String, "18.5")
+        XCTAssertNil(wire["platformVersion"], "platformVersion is Appium-specific and must be namespaced")
         XCTAssertEqual(wire["appium:automationName"] as? String, "XCUITest")
         XCTAssertEqual(wire["appium:udid"] as? String, "UDID-1")
         XCTAssertEqual(wire["appium:usePreinstalledWDA"] as? Bool, true)
@@ -52,6 +60,8 @@ final class DeviceCapabilitiesTests: XCTestCase {
         )
         let wire = try encoded(caps)
         XCTAssertEqual(wire["platformName"] as? String, "tvOS")
+        XCTAssertEqual(wire["appium:platformVersion"] as? String, "26.5")
+        XCTAssertNil(wire["platformVersion"], "platformVersion is Appium-specific and must be namespaced")
         XCTAssertEqual(wire["appium:xcodeOrgId"] as? String, "TEAMID1234")
         XCTAssertEqual(wire["appium:xcodeSigningId"] as? String, "Apple Development")
         XCTAssertEqual(wire["appium:updatedWDABundleId"] as? String, "com.facebook.WebDriverAgentRunner")

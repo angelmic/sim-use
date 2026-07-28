@@ -123,6 +123,47 @@ final class AppiumClientTests: XCTestCase {
         }
     }
 
+    func testCreationFailureCanBeClassifiedWithoutWrappingOperationFailure() async {
+        let createFailure = MockTransport(responses: [
+            webdriverError("Unable to launch WebDriverAgent: test-without-building failed"),
+        ])
+        let firstClient = AppiumClient(baseURL: url("http://127.0.0.1:4723"), transport: createFailure)
+        do {
+            _ = try await firstClient.withSession(
+                capabilities: caps,
+                classifyCreationFailure: true
+            ) { try await $0.source() }
+            XCTFail("Expected classified session-creation failure")
+        } catch let error as AppiumSessionCreationError {
+            XCTAssertTrue(error.localizedDescription.contains("test-without-building failed"))
+            XCTAssertTrue(error.underlying is AppiumError)
+        } catch {
+            XCTFail("Expected AppiumSessionCreationError, got \(error)")
+        }
+
+        let operationFailure = MockTransport(responses: [
+            sessionResponse(id: "s"),
+            webdriverError("source failed after session creation"),
+            emptyOK(),
+        ])
+        let secondClient = AppiumClient(baseURL: url("http://127.0.0.1:4723"), transport: operationFailure)
+        do {
+            _ = try await secondClient.withSession(
+                capabilities: caps,
+                classifyCreationFailure: true
+            ) { try await $0.source() }
+            XCTFail("Expected operation failure")
+        } catch is AppiumSessionCreationError {
+            XCTFail("An operation failure must not be classified as session creation")
+        } catch let error as AppiumError {
+            guard case .webdriver = error else {
+                return XCTFail("Expected .webdriver, got \(error)")
+            }
+        } catch {
+            XCTFail("Expected AppiumError, got \(error)")
+        }
+    }
+
     func testLiveReadsEndpointFromEnvironment() throws {
         let client = try AppiumClient.live(environment: ["SIM_USE_APPIUM_URL": "http://10.0.0.2:4725"])
         XCTAssertEqual(client.baseURL.absoluteString, "http://10.0.0.2:4725")
@@ -173,6 +214,14 @@ private func sessionResponse(id: String) -> Result<AppiumResponse, Error> {
 
 private func emptyOK() -> Result<AppiumResponse, Error> {
     .success(AppiumResponse(statusCode: 200, body: Data(#"{"value":null}"#.utf8)))
+}
+
+private func webdriverError(_ message: String) -> Result<AppiumResponse, Error> {
+    let escaped = message.replacingOccurrences(of: #"""#, with: #"\""#)
+    return .success(AppiumResponse(
+        statusCode: 500,
+        body: Data(#"{"value":{"error":"unknown error","message":"\#(escaped)"}}"#.utf8)
+    ))
 }
 
 private struct SessionEnvelopeProbe: Decodable {

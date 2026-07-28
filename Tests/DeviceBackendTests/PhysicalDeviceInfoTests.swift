@@ -13,6 +13,14 @@ final class PhysicalDeviceInfoTests: XCTestCase {
         XCTAssertNil(PhysicalDeviceInfo.majorVersion(fromRuntime: "iOS"))
     }
 
+    func testFullVersionParsesRuntimeLabels() {
+        XCTAssertEqual(PhysicalDeviceInfo.version(fromRuntime: "iOS 18.7.8"), "18.7.8")
+        XCTAssertEqual(PhysicalDeviceInfo.version(fromRuntime: "tvOS 26.5"), "26.5")
+        XCTAssertEqual(PhysicalDeviceInfo.version(fromRuntime: "tvOS 26.5 beta"), "26.5")
+        XCTAssertNil(PhysicalDeviceInfo.version(fromRuntime: nil))
+        XCTAssertNil(PhysicalDeviceInfo.version(fromRuntime: "tvOS"))
+    }
+
     func testModernGateKeysOnSeventeen() {
         XCTAssertFalse(info(major: 16).isModern)
         XCTAssertTrue(info(major: 17).isModern)
@@ -34,6 +42,7 @@ final class PhysicalDeviceInfoTests: XCTestCase {
         let info = try XCTUnwrap(PhysicalDeviceInfo(device: tv))
         XCTAssertEqual(info.family, .tvos)
         XCTAssertEqual(info.osMajorVersion, 26)
+        XCTAssertEqual(info.osVersion, "26.5")
         XCTAssertTrue(info.isConnected)
     }
 

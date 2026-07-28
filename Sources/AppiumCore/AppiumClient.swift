@@ -2,6 +2,20 @@
 import Foundation
 import SimUseCore
 
+/// Marks the one failure phase that is safe for a caller to retry with a
+/// different WDA startup strategy. The original error remains available so
+/// callers that do not recover can preserve its exact user-facing message
+/// and `HintProviding` conformance.
+public struct AppiumSessionCreationError: Error, LocalizedError, @unchecked Sendable {
+    public let underlying: Error
+
+    public init(underlying: Error) {
+        self.underlying = underlying
+    }
+
+    public var errorDescription: String? { underlying.localizedDescription }
+}
+
 /// Small W3C WebDriver client for Appium's XCUITest surface. A fresh session
 /// is created from the caller's `AppiumCapabilities`, runs one operation, and
 /// is always deleted before returning. It carries no platform knowledge:
@@ -31,9 +45,18 @@ public struct AppiumClient: Sendable {
 
     public func withSession<Result>(
         capabilities: AppiumCapabilities,
+        classifyCreationFailure: Bool = false,
         operation: (AppiumSession) async throws -> Result
     ) async throws -> Result {
-        let sessionID = try await createSession(capabilities: capabilities)
+        let sessionID: String
+        do {
+            sessionID = try await createSession(capabilities: capabilities)
+        } catch {
+            if classifyCreationFailure {
+                throw AppiumSessionCreationError(underlying: error)
+            }
+            throw error
+        }
         let session = AppiumSession(id: sessionID, client: self)
         do {
             let result = try await operation(session)

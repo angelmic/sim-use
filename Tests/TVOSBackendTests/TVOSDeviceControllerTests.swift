@@ -10,6 +10,13 @@ import XCTest
 /// HID / simctl shortcuts, and the tvOS ≤16 `ui` fail-fast.
 final class TVOSDeviceControllerTests: XCTestCase {
     private let tvUDID = "c311e5afe90ee702b80e8b64e1e12796e04e63a0"
+    private var homesToClean: [URL] = []
+
+    override func tearDown() {
+        for home in homesToClean { try? FileManager.default.removeItem(at: home) }
+        homesToClean = []
+        super.tearDown()
+    }
 
     private func device(major: Int, state: String = "connected") -> Device {
         Device(udid: tvUDID, name: "辦公桌tv理查", platform: .tvos, state: state, runtime: "tvOS \(major).5", target: .device)
@@ -17,7 +24,8 @@ final class TVOSDeviceControllerTests: XCTestCase {
 
     private func makeController(
         _ responses: [Result<AppiumResponse, Error>],
-        device: Device
+        device: Device,
+        wdaCache: WDADeviceCache = .disabled()
     ) -> (TVOSDeviceController, MockTransport) {
         let transport = MockTransport(responses: responses)
         let base = URL(string: "http://127.0.0.1:4799")!
@@ -30,7 +38,8 @@ final class TVOSDeviceControllerTests: XCTestCase {
             ),
             // Team id has no default (D7); supply one so the tvOS xcodebuild
             // caps assemble instead of failing fast.
-            config: DeviceCapabilityConfig(xcodeOrgId: "TEAMID1234")
+            config: tvConfig(),
+            wdaCache: wdaCache
         )
         return (controller, transport)
     }
@@ -108,18 +117,102 @@ final class TVOSDeviceControllerTests: XCTestCase {
         XCTAssertEqual(requests.last?.method, "DELETE")
     }
 
+    // MARK: - Per-device WDA signing/build cache
+
+    func testValidSigningCacheSelectsPrebuiltWDAWithStablePerDeviceDerivedData() async throws {
+        let (cache, expectedPath) = try warmCache()
+        let (controller, transport) = makeController(
+            [statusOK(), sessionResponse(), sourceResponse(focusedLabel: "TestFlight"), emptyOK()],
+            device: device(major: 26),
+            wdaCache: cache
+        )
+
+        _ = try await controller.describeUI(udid: tvUDID, includeRaw: false)
+
+        let requests = await transport.recordedRequests()
+        let caps = try decodeCaps(requests[1])
+        XCTAssertEqual(caps.capabilities.alwaysMatch.platformVersion, "26.5")
+        XCTAssertEqual(caps.capabilities.alwaysMatch.usePrebuiltWDA, true)
+        XCTAssertEqual(caps.capabilities.alwaysMatch.derivedDataPath, expectedPath)
+    }
+
+    func testPrebuiltCreationFailureInvalidatesAndRepairsExactlyOnce() async throws {
+        let (cache, expectedPath) = try warmCache()
+        let (controller, transport) = makeController(
+            [
+                statusOK(),
+                webdriverError("Unable to launch WebDriverAgent: test-without-building failed"),
+                sessionResponse(id: "repair-session"),
+                sourceResponse(focusedLabel: "TestFlight"),
+                emptyOK(),
+            ],
+            device: device(major: 26),
+            wdaCache: cache
+        )
+
+        _ = try await controller.describeUI(udid: tvUDID, includeRaw: false)
+
+        let requests = await transport.recordedRequests()
+        let sessionRequests = requests.filter { $0.method == "POST" && $0.url.path == "/session" }
+        XCTAssertEqual(sessionRequests.count, 2, "one fast attempt + one repair build, never an unbounded retry")
+        let fast = try decodeCaps(sessionRequests[0])
+        let repair = try decodeCaps(sessionRequests[1])
+        XCTAssertEqual(fast.capabilities.alwaysMatch.usePrebuiltWDA, true)
+        XCTAssertNil(repair.capabilities.alwaysMatch.usePrebuiltWDA)
+        XCTAssertEqual(fast.capabilities.alwaysMatch.derivedDataPath, expectedPath)
+        XCTAssertEqual(repair.capabilities.alwaysMatch.derivedDataPath, expectedPath)
+        XCTAssertNoThrow(try cache.readRecord(for: tvUDID), "successful repair must restore the trust record")
+    }
+
+    func testOperationFailureAfterSessionCreationNeverTriggersRebuild() async {
+        do {
+            let (cache, _) = try warmCache()
+            let (controller, transport) = makeController(
+                [
+                    statusOK(),
+                    sessionResponse(),
+                    webdriverError("source failed after the WDA session was already created"),
+                    emptyOK(),
+                ],
+                device: device(major: 26),
+                wdaCache: cache
+            )
+
+            do {
+                _ = try await controller.describeUI(udid: tvUDID, includeRaw: false)
+                XCTFail("expected source failure")
+            } catch {
+                XCTAssertTrue(error.localizedDescription.contains("source failed"))
+            }
+            let requests = await transport.recordedRequests()
+            XCTAssertEqual(
+                requests.filter { $0.method == "POST" && $0.url.path == "/session" }.count,
+                1,
+                "only session-creation failures may consume the one repair attempt"
+            )
+        } catch {
+            XCTFail("fixture setup failed: \(error)")
+        }
+    }
+
     // MARK: - Probes / helpers
 
     private struct CapsProbe: Decodable {
         struct Caps: Decodable {
             struct AlwaysMatch: Decodable {
                 let platformName: String
+                let platformVersion: String?
                 let xcodeOrgId: String?
                 let updatedWDABundleId: String?
+                let usePrebuiltWDA: Bool?
+                let derivedDataPath: String?
                 enum CodingKeys: String, CodingKey {
                     case platformName
+                    case platformVersion = "appium:platformVersion"
                     case xcodeOrgId = "appium:xcodeOrgId"
                     case updatedWDABundleId = "appium:updatedWDABundleId"
+                    case usePrebuiltWDA = "appium:usePrebuiltWDA"
+                    case derivedDataPath = "appium:derivedDataPath"
                 }
             }
             let alwaysMatch: AlwaysMatch
@@ -130,6 +223,43 @@ final class TVOSDeviceControllerTests: XCTestCase {
     private struct ExecuteProbe: Decodable {
         let script: String
         let args: [[String: String]]
+    }
+
+    private func decodeCaps(_ request: AppiumRequest) throws -> CapsProbe {
+        try JSONDecoder().decode(CapsProbe.self, from: try XCTUnwrap(request.body))
+    }
+
+    private func tvConfig() -> DeviceCapabilityConfig {
+        DeviceCapabilityConfig(xcodeOrgId: "TEAMID1234")
+    }
+
+    private func warmCache() throws -> (WDADeviceCache, String) {
+        let home = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("tvos-device-cache-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        homesToClean.append(home)
+        let signedAt = Date(timeIntervalSince1970: 1_774_837_800)
+        let expiresAt = Date(timeIntervalSince1970: 1_806_373_800)
+        let cache = WDADeviceCache(
+            home: home,
+            metadataProvider: {
+                .init(xcodeBuild: "17C529", wdaSourceSHA256: "fixture-wda-source")
+            },
+            artifactInspector: { _ in
+                .init(
+                    bundleIdentifier: "com.facebook.WebDriverAgentRunner.xctrunner",
+                    teamIdentifier: "TEAMID1234",
+                    signedAt: signedAt,
+                    provisioningExpiresAt: expiresAt
+                )
+            },
+            now: { Date(timeIntervalSince1970: 1_774_924_200) }
+        )
+        let info = try XCTUnwrap(PhysicalDeviceInfo(device: device(major: 26)))
+        let plan = cache.plan(for: info, config: tvConfig())
+        try FileManager.default.createDirectory(at: plan.runnerAppPath, withIntermediateDirectories: true)
+        _ = try XCTUnwrap(cache.recordSuccessfulLaunch(plan))
+        return (cache, plan.derivedDataPath.path)
     }
 
     private func sourceResponse(focusedLabel: String) -> Result<AppiumResponse, Error> {
@@ -173,4 +303,12 @@ private func emptyOK() -> Result<AppiumResponse, Error> {
 }
 private func statusOK() -> Result<AppiumResponse, Error> {
     .success(AppiumResponse(statusCode: 200, body: Data(#"{"value":{"ready":true}}"#.utf8)))
+}
+
+private func webdriverError(_ message: String) -> Result<AppiumResponse, Error> {
+    let escaped = message.replacingOccurrences(of: #"""#, with: #"\""#)
+    return .success(AppiumResponse(
+        statusCode: 500,
+        body: Data(#"{"value":{"error":"unknown error","message":"\#(escaped)"}}"#.utf8)
+    ))
 }

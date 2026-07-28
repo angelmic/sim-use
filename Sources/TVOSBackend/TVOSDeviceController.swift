@@ -19,17 +19,20 @@ public struct TVOSDeviceController: Sendable {
     private let preflight: DevicePreflight
     private let config: DeviceCapabilityConfig
     private let defaultBundleId: String?
+    private let wdaCache: WDADeviceCache
 
     public init(
         client: AppiumClient,
         preflight: DevicePreflight,
         config: DeviceCapabilityConfig,
-        defaultBundleId: String? = nil
+        defaultBundleId: String? = nil,
+        wdaCache: WDADeviceCache = .disabled()
     ) {
         self.client = client
         self.preflight = preflight
         self.config = config
         self.defaultBundleId = defaultBundleId?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyOrNil
+        self.wdaCache = wdaCache
     }
 
     public static func live(
@@ -39,7 +42,8 @@ public struct TVOSDeviceController: Sendable {
             client: try .live(environment: environment),
             preflight: try .live(environment: environment),
             config: .live(environment: environment),
-            defaultBundleId: environment["SIM_USE_TVOS_BUNDLE_ID"]
+            defaultBundleId: environment["SIM_USE_TVOS_BUNDLE_ID"],
+            wdaCache: .live(environment: environment)
         )
     }
 
@@ -55,8 +59,7 @@ public struct TVOSDeviceController: Sendable {
         guard info.isModern else {
             throw TVOSDeviceUIUnsupportedError(udid: udid, osMajorVersion: info.osMajorVersion)
         }
-        let caps = try capabilities(for: info, bundleId: bundleId)
-        return try await withActivatedSession(caps, bundleId: bundleId) { session in
+        return try await withActivatedSession(info, bundleId: bundleId) { session in
             try TVOSOutlineRenderer.render(source: try await session.source(), includeRaw: includeRaw)
         }
     }
@@ -69,8 +72,7 @@ public struct TVOSDeviceController: Sendable {
         reportFocus: Bool = false
     ) async throws -> TVOSRemoteResult {
         let info = try await preflight.run(udid: udid)
-        let caps = try capabilities(for: info, bundleId: bundleId)
-        return try await withActivatedSession(caps, bundleId: bundleId) { session in
+        return try await withActivatedSession(info, bundleId: bundleId) { session in
             // No HID fast path on a physical TV — the press always goes
             // through Appium. Focus is observed only when asked, since each
             // source round-trip costs a WDA hierarchy fetch.
@@ -86,8 +88,7 @@ public struct TVOSDeviceController: Sendable {
 
     public func screenshot(udid: String, bundleId: String? = nil) async throws -> Data {
         let info = try await preflight.run(udid: udid)
-        let caps = try capabilities(for: info, bundleId: bundleId)
-        return try await withActivatedSession(caps, bundleId: bundleId) { session in
+        return try await withActivatedSession(info, bundleId: bundleId) { session in
             try await session.screenshot()
         }
     }
@@ -98,10 +99,6 @@ public struct TVOSDeviceController: Sendable {
             .entries.first { $0.states.contains("focused") }
     }
 
-    private func capabilities(for info: PhysicalDeviceInfo, bundleId: String?) throws -> AppiumCapabilities {
-        try DeviceCapabilityBuilder.capabilities(for: info, bundleId: resolvedBundleId(bundleId), config: config)
-    }
-
     private func resolvedBundleId(_ bundleId: String?) -> String? {
         bundleId?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyOrNil ?? defaultBundleId
     }
@@ -110,17 +107,116 @@ public struct TVOSDeviceController: Sendable {
     /// current screen with `mobile: activateApp` (activate — not launch)
     /// before the verb runs, matching the iOS device path.
     private func withActivatedSession<Result>(
-        _ capabilities: AppiumCapabilities,
+        _ info: PhysicalDeviceInfo,
         bundleId: String?,
         operation: @escaping (AppiumSession) async throws -> Result
     ) async throws -> Result {
         let resolved = resolvedBundleId(bundleId)
-        return try await client.withSession(capabilities: capabilities) { session in
-            if let resolved {
-                try await session.execute(script: "mobile: activateApp", args: [["bundleId": resolved]])
+        let plan = wdaCache.plan(for: info, config: config)
+        var capabilities = try DeviceCapabilityBuilder.capabilities(
+            for: info,
+            bundleId: resolved,
+            config: config
+        )
+        apply(plan: plan, to: &capabilities)
+
+        do {
+            let result = try await runSession(
+                capabilities: capabilities,
+                resolvedBundleId: resolved,
+                onSessionCreated: { recordCacheSuccess(plan) },
+                operation: operation
+            )
+            return result
+        } catch let creationError as AppiumSessionCreationError {
+            // A validated prebuilt artifact can still become unusable after
+            // a device/profile state change. Invalidate only its trust
+            // record and make one incremental build attempt in the same
+            // DerivedData directory. Never retry an operation after the
+            // session was created — remote/select/source verbs are not all
+            // idempotent.
+            guard plan.usePrebuiltWDA,
+                  Self.isRecoverableFastPathFailure(creationError.underlying)
+            else {
+                throw creationError.underlying
+            }
+            try? wdaCache.invalidate(udid: info.udid)
+            var repairCapabilities = try DeviceCapabilityBuilder.capabilities(
+                for: info,
+                bundleId: resolved,
+                config: config
+            )
+            repairCapabilities.derivedDataPath = plan.derivedDataPath.path
+            repairCapabilities.usePrebuiltWDA = nil
+            do {
+                return try await runSession(
+                    capabilities: repairCapabilities,
+                    resolvedBundleId: resolved,
+                    onSessionCreated: { recordCacheSuccess(plan) },
+                    operation: operation
+                )
+            } catch let repairError as AppiumSessionCreationError {
+                // The repair budget is exactly one. Preserve the underlying
+                // Appium error and do not recurse into another build.
+                throw repairError.underlying
+            }
+        }
+    }
+
+    private func runSession<Result>(
+        capabilities: AppiumCapabilities,
+        resolvedBundleId: String?,
+        onSessionCreated: @escaping @Sendable () -> Void,
+        operation: @escaping (AppiumSession) async throws -> Result
+    ) async throws -> Result {
+        try await client.withSession(
+            capabilities: capabilities,
+            classifyCreationFailure: true
+        ) { session in
+            onSessionCreated()
+            if let resolvedBundleId {
+                try await session.execute(
+                    script: "mobile: activateApp",
+                    args: [["bundleId": resolvedBundleId]]
+                )
             }
             return try await operation(session)
         }
+    }
+
+    private func apply(
+        plan: WDADeviceCache.Plan,
+        to capabilities: inout AppiumCapabilities
+    ) {
+        // Disabled/non-xcodebuild strategies stay byte-for-byte unchanged.
+        guard plan.missReason != .cacheDisabled,
+              plan.missReason != .strategyNotCacheable
+        else { return }
+        capabilities.derivedDataPath = plan.derivedDataPath.path
+        capabilities.usePrebuiltWDA = plan.usePrebuiltWDA ? true : nil
+    }
+
+    private func recordCacheSuccess(_ plan: WDADeviceCache.Plan) {
+        do {
+            try wdaCache.recordSuccessfulLaunch(plan)
+        } catch {
+            // The user-visible verb already succeeded. A cache is an
+            // optimization, so report its failure on stderr without
+            // changing the command outcome.
+            FileHandle.standardError.write(Data(
+                "warning: could not update WDA signing cache: \(error.localizedDescription)\n".utf8
+            ))
+        }
+    }
+
+    private static func isRecoverableFastPathFailure(_ error: Error) -> Bool {
+        let message = error.localizedDescription.lowercased()
+        return [
+            "webdriveragent",
+            "xcodebuild",
+            "test-without-building",
+            "prebuilt wda",
+        ].contains { message.contains($0) }
     }
 }
 

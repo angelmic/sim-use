@@ -3,12 +3,24 @@ import Foundation
 
 public struct AppiumCapabilities: Sendable, Encodable {
     public var platformName: String
+    /// Exact device OS version. Appium requires the vendor-prefixed
+    /// `appium:platformVersion` capability; XCUITest uses it to select
+    /// RemoteXPC/deployment behavior without probing or guessing from the
+    /// UDID.
+    public var platformVersion: String?
     public var automationName: String?
     public var udid: String?
     public var bundleId: String?
     public var autoLaunch: Bool?
     public var noReset: Bool?
     public var useNewWDA: Bool?
+    /// Reuse a previously built WDA product and run only
+    /// `test-without-building`. DeviceBackend sets this only after its
+    /// fingerprint and code-signing cache validates.
+    public var usePrebuiltWDA: Bool?
+    /// Stable per-device Xcode DerivedData location. It is emitted even on
+    /// a cache miss so the repair build remains incremental.
+    public var derivedDataPath: String?
     public var newCommandTimeout: Int?
     public var wdaLocalPort: Int?
     /// Port WebDriverAgent listens on on the physical device. This is
@@ -34,12 +46,15 @@ public struct AppiumCapabilities: Sendable, Encodable {
 
     public init(
         platformName: String,
+        platformVersion: String? = nil,
         automationName: String? = nil,
         udid: String? = nil,
         bundleId: String? = nil,
         autoLaunch: Bool? = nil,
         noReset: Bool? = nil,
         useNewWDA: Bool? = nil,
+        usePrebuiltWDA: Bool? = nil,
+        derivedDataPath: String? = nil,
         newCommandTimeout: Int? = nil,
         wdaLocalPort: Int? = nil,
         wdaRemotePort: Int? = nil,
@@ -51,12 +66,15 @@ public struct AppiumCapabilities: Sendable, Encodable {
         xcodeSigningId: String? = nil
     ) {
         self.platformName = platformName
+        self.platformVersion = platformVersion
         self.automationName = automationName
         self.udid = udid
         self.bundleId = bundleId
         self.autoLaunch = autoLaunch
         self.noReset = noReset
         self.useNewWDA = useNewWDA
+        self.usePrebuiltWDA = usePrebuiltWDA
+        self.derivedDataPath = derivedDataPath
         self.newCommandTimeout = newCommandTimeout
         self.wdaLocalPort = wdaLocalPort
         self.wdaRemotePort = wdaRemotePort
@@ -70,12 +88,15 @@ public struct AppiumCapabilities: Sendable, Encodable {
 
     enum CodingKeys: String, CodingKey {
         case platformName
+        case platformVersion = "appium:platformVersion"
         case automationName = "appium:automationName"
         case udid = "appium:udid"
         case bundleId = "appium:bundleId"
         case autoLaunch = "appium:autoLaunch"
         case noReset = "appium:noReset"
         case useNewWDA = "appium:useNewWDA"
+        case usePrebuiltWDA = "appium:usePrebuiltWDA"
+        case derivedDataPath = "appium:derivedDataPath"
         case newCommandTimeout = "appium:newCommandTimeout"
         case wdaLocalPort = "appium:wdaLocalPort"
         case wdaRemotePort = "appium:wdaRemotePort"
@@ -94,12 +115,15 @@ public struct AppiumCapabilities: Sendable, Encodable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(platformName, forKey: .platformName)
+        try container.encodeIfPresent(platformVersion, forKey: .platformVersion)
         try container.encodeIfPresent(automationName, forKey: .automationName)
         try container.encodeIfPresent(udid, forKey: .udid)
         try container.encodeIfPresent(bundleId, forKey: .bundleId)
         try container.encodeIfPresent(autoLaunch, forKey: .autoLaunch)
         try container.encodeIfPresent(noReset, forKey: .noReset)
         try container.encodeIfPresent(useNewWDA, forKey: .useNewWDA)
+        try container.encodeIfPresent(usePrebuiltWDA, forKey: .usePrebuiltWDA)
+        try container.encodeIfPresent(derivedDataPath, forKey: .derivedDataPath)
         try container.encodeIfPresent(newCommandTimeout, forKey: .newCommandTimeout)
         try container.encodeIfPresent(wdaLocalPort, forKey: .wdaLocalPort)
         try container.encodeIfPresent(wdaRemotePort, forKey: .wdaRemotePort)

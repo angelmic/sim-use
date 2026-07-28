@@ -20,16 +20,27 @@ public struct PhysicalDeviceInfo: Sendable, Equatable {
     /// bare `idevice_id` fallback row, which is always iOS and always a
     /// modern device, so the ≥17 gate treats a nil major as modern.
     public let osMajorVersion: Int?
+    /// Full dotted OS version ("18.7.8", "26.5") when discovery reported
+    /// it. Appium uses this both for RemoteXPC eligibility and to choose the
+    /// correct deployment target for a cached WDA build.
+    public let osVersion: String?
     /// Effective connection state. This is normally
     /// `connectionProperties.tunnelState`, but a live `idevice_id -l` USB
     /// overlap promotes a stale "connecting" CoreDevice row to "connected".
     public let tunnelState: String
 
-    public init(udid: String, family: Device.Platform, osMajorVersion: Int?, tunnelState: String) {
+    public init(
+        udid: String,
+        family: Device.Platform,
+        osMajorVersion: Int?,
+        tunnelState: String,
+        osVersion: String? = nil
+    ) {
         self.udid = udid
         self.family = family
         self.osMajorVersion = osMajorVersion
         self.tunnelState = tunnelState
+        self.osVersion = osVersion
     }
 
     /// Device discovery has a live route — a session can be attempted. Keys
@@ -56,7 +67,8 @@ public struct PhysicalDeviceInfo: Sendable, Equatable {
             udid: device.udid,
             family: device.platform,
             osMajorVersion: Self.majorVersion(fromRuntime: device.runtime),
-            tunnelState: device.state
+            tunnelState: device.state,
+            osVersion: Self.version(fromRuntime: device.runtime)
         )
     }
 
@@ -75,6 +87,17 @@ public struct PhysicalDeviceInfo: Sendable, Equatable {
             }
         }
         return Int(digits)
+    }
+
+    /// Pull the full dotted version from a discovery runtime label without
+    /// guessing when the label has no numeric component.
+    static func version(fromRuntime runtime: String?) -> String? {
+        guard let runtime else { return nil }
+        guard let start = runtime.firstIndex(where: \.isNumber) else { return nil }
+        let suffix = runtime[start...]
+        let version = suffix.prefix { $0.isNumber || $0 == "." }
+        let trimmed = version.drop(while: { $0 == "." }).reversed().drop(while: { $0 == "." }).reversed()
+        return trimmed.isEmpty ? nil : String(trimmed)
     }
 }
 

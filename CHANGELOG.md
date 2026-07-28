@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Physical-device discovery keeps rich `devicectl` metadata while treating a
     matching live `idevice_id -l` USB attachment as connected. This avoids a
     false negative when CoreDevice's local-network row remains at `connecting`.
+  - Modern physical tvOS sessions keep a signed-WDA record and stable
+    DerivedData directory per UDID under `~/.sim-use/<UDID>/`. An exact
+    device/Xcode/WDA-source/signing fingerprint plus a valid, unexpired runner
+    selects Appium's `usePrebuiltWDA` (`test-without-building`) path; a miss
+    keeps the same DerivedData for an incremental build. A failed prebuilt
+    session creation invalidates only the record and repairs once, while
+    post-creation UI/remote operations are never retried. Set
+    `SIM_USE_WDA_CACHE=0` to disable the optimization or
+    `SIM_USE_WDA_SOURCE_ROOT` when Appium's WDA sources live outside its
+    standard home.
   - New `scripts/test-runner-ios-device.sh` (requires-device; SKIPs cleanly when absent).
 
 - Experimental tvOS Simulator support through Appium/XCUITest: top-level `ui` and `screenshot`, the `sim-use tvos` namespace, and focus-aware `tvos remote <up|down|left|right|select|menu|play-pause|home>`. Each operation owns and closes a short-lived WebDriver session; `--bundle-id` (or `SIM_USE_TVOS_BUNDLE_ID` for top-level verbs) restores the target app after a cold WDA launch, and `SIM_USE_APPIUM_URL` overrides the default `http://127.0.0.1:4723` endpoint. `tvos type <text>` enters whole strings into the focused text field through the focus keyboard (WebDriver element sendKeys — the only string-entry channel tvOS exposes; the tvOS WebDriverAgent has no keyboardInput or W3C key actions).
