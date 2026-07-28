@@ -139,6 +139,44 @@ struct AppleDeviceListerMergeTests {
 /// nothing is connected so CI (and a laptop with no cable) stays green.
 @Suite("AppleDeviceLister — live enumeration")
 struct AppleDeviceListerLiveTests {
+    @Test("a live details probe promotes a stale paired Apple TV")
+    func detailsProbePromotesAppleTV() throws {
+        let officeTV = Device(
+            udid: "c311e5afe90ee702b80e8b64e1e12796e04e63a0",
+            name: "辦公桌tv理查",
+            platform: .tvos,
+            state: "disconnected",
+            runtime: "tvOS 26.5",
+            target: .device
+        )
+        let unavailableTV = Device(
+            udid: "00008110-000E3D101A89401E",
+            name: "書房",
+            platform: .tvos,
+            state: "unavailable",
+            runtime: "tvOS 26.5",
+            target: .device
+        )
+        var probed: [String] = []
+
+        let devices = AppleDeviceLister.promoteLiveDisconnectedAppleTVs(
+            in: [officeTV, unavailableTV],
+            devicectlDetailsProvider: { udid in
+                probed.append(udid)
+                return udid == "c311e5afe90ee702b80e8b64e1e12796e04e63a0"
+                    ? Device.State.deviceConnected
+                    : nil
+            }
+        )
+
+        let tv = try #require(devices.first { $0.name == "辦公桌tv理查" })
+        #expect(tv.state == Device.State.deviceConnected)
+        #expect(tv.isUsable)
+        #expect(probed == ["c311e5afe90ee702b80e8b64e1e12796e04e63a0"])
+        let stillUnavailable = try #require(devices.first { $0.name == "書房" })
+        #expect(stillUnavailable.state == "unavailable")
+    }
+
     @Test("listPhysicalDevices returns device-target rows or an empty list")
     func liveList() throws {
         let devices = AppleDeviceLister.listPhysicalDevices()

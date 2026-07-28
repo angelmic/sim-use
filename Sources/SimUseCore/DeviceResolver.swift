@@ -361,7 +361,11 @@ public enum AppleDeviceLister {
     /// failure or a missing idevice_id degrades to fewer rows, never an
     /// error — the `devices` verb must still list Simulators.
     public static func listPhysicalDevices() -> [Device] {
-        listPhysicalDevices(devicectlProvider: runDevicectl, ideviceIDProvider: runIdeviceID)
+        listPhysicalDevices(
+            devicectlProvider: runDevicectl,
+            ideviceIDProvider: runIdeviceID,
+            devicectlDetailsProvider: runDevicectlDetails
+        )
     }
 
     /// Injectable seam behind `listPhysicalDevices()`. Internal so tests can
@@ -372,11 +376,52 @@ public enum AppleDeviceLister {
         devicectlProvider: () -> Data?,
         ideviceIDProvider: () -> [String]
     ) -> [Device] {
+        listPhysicalDevices(
+            devicectlProvider: devicectlProvider,
+            ideviceIDProvider: ideviceIDProvider,
+            devicectlDetailsProvider: { _ in nil }
+        )
+    }
+
+    /// `devicectl list devices` can retain a stale `disconnected` cache row
+    /// for a paired Wi-Fi Apple TV even while `device info details` can open
+    /// a live CoreDevice tunnel. Probe only those tvOS rows: unavailable TVs
+    /// and iOS devices remain untouched, so normal listing stays cheap.
+    static func listPhysicalDevices(
+        devicectlProvider: () -> Data?,
+        ideviceIDProvider: () -> [String],
+        devicectlDetailsProvider: (String) -> String?
+    ) -> [Device] {
         var devices: [Device] = []
         if let data = devicectlProvider() {
             devices = (try? parseDevicectlJSON(data)) ?? []
         }
+        devices = promoteLiveDisconnectedAppleTVs(
+            in: devices,
+            devicectlDetailsProvider: devicectlDetailsProvider
+        )
         return mergeIdeviceIDUDIDs(into: devices, udids: ideviceIDProvider())
+    }
+
+    static func promoteLiveDisconnectedAppleTVs(
+        in devices: [Device],
+        devicectlDetailsProvider: (String) -> String?
+    ) -> [Device] {
+        devices.map { device in
+            guard device.platform == .tvos,
+                  device.target == .device,
+                  device.state.lowercased() == "disconnected",
+                  devicectlDetailsProvider(device.udid)?.lowercased() == Device.State.deviceConnected
+            else { return device }
+            return Device(
+                udid: device.udid,
+                name: device.name,
+                platform: device.platform,
+                state: Device.State.deviceConnected,
+                runtime: device.runtime,
+                target: device.target
+            )
+        }
     }
 
     // MARK: - subprocess runners
@@ -401,6 +446,41 @@ public enum AppleDeviceLister {
         }
         guard process.terminationStatus == 0 else { return nil }
         return try? Data(contentsOf: tmp)
+    }
+
+    /// Actively resolve a paired Apple TV. Unlike the cached list verb,
+    /// `device info details` opens the CoreDevice tunnel and reports its live
+    /// state. Returns nil on any tool or parse failure.
+    static func runDevicectlDetails(udid: String) -> String? {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("sim-use-devicectl-details-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = [
+            "devicectl", "device", "info", "details",
+            "--device", udid,
+            "--timeout", "10",
+            "--json-output", tmp.path,
+        ]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+        guard process.terminationStatus == 0,
+              let data = try? Data(contentsOf: tmp)
+        else { return nil }
+
+        struct Envelope: Decodable { let result: ResultBlock }
+        struct ResultBlock: Decodable { let connectionProperties: ConnectionProps? }
+        struct ConnectionProps: Decodable { let tunnelState: String? }
+        return try? JSONDecoder().decode(Envelope.self, from: data)
+            .result.connectionProperties?.tunnelState
     }
 
     /// `idevice_id -l` via `env` so PATH lookup handles the Homebrew install
