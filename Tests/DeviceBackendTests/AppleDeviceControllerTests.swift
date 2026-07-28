@@ -31,7 +31,8 @@ final class AppleDeviceControllerTests: XCTestCase {
 
     private func makeController(
         _ responses: [Result<AppiumResponse, Error>],
-        device: Device
+        device: Device,
+        activationSettler: @escaping @Sendable () async throws -> Void = {}
     ) -> (AppleDeviceController, MockTransport) {
         let transport = MockTransport(responses: responses)
         let base = URL(string: "http://127.0.0.1:4788")!
@@ -45,7 +46,8 @@ final class AppleDeviceControllerTests: XCTestCase {
                 infoResolver: DeviceInfoResolver(provider: { [device] })
             ),
             config: DeviceCapabilityConfig(),
-            cacheHome: home
+            cacheHome: home,
+            activationSettler: activationSettler
         )
         return (controller, transport)
     }
@@ -225,6 +227,26 @@ final class AppleDeviceControllerTests: XCTestCase {
         ])
     }
 
+    func testTargetedScreenshotSettlesActivationBeforeCapture() async throws {
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        let probe = ActivationSettleProbe()
+        let (controller, transport) = makeController(
+            [statusOK(), sessionResponse(), emptyOK(), valueResponse(png.base64EncodedString()), emptyOK()],
+            device: iPhone(),
+            activationSettler: { await probe.record() }
+        )
+
+        _ = try await controller.screenshot(udid: iPhoneUDID, bundleId: "com.example.app")
+
+        let settleCount = await probe.count
+        XCTAssertEqual(settleCount, 1)
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(requests.map { $0.url.path }, [
+            "/status", "/session", "/session/session-1/execute/sync",
+            "/session/session-1/screenshot", "/session/session-1",
+        ])
+    }
+
     // MARK: - tvOS family guard
 
     func testCoordinateVerbsRejectTVOSDeviceBeforeSession() async {
@@ -288,5 +310,13 @@ final class AppleDeviceControllerTests: XCTestCase {
     private struct ExecuteProbe: Decodable {
         let script: String
         let args: [[String: String]]
+    }
+}
+
+private actor ActivationSettleProbe {
+    private(set) var count = 0
+
+    func record() {
+        count += 1
     }
 }

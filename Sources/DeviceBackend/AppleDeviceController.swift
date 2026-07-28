@@ -29,6 +29,7 @@ public struct AppleDeviceController: Sendable {
     private let preflight: DevicePreflight
     private let config: DeviceCapabilityConfig
     private let cacheHome: URL
+    private let activationSettler: @Sendable () async throws -> Void
 
     public init(
         client: AppiumClient,
@@ -36,10 +37,32 @@ public struct AppleDeviceController: Sendable {
         config: DeviceCapabilityConfig,
         cacheHome: URL = OutlineCache.homeDirectory
     ) {
+        self.init(
+            client: client,
+            preflight: preflight,
+            config: config,
+            cacheHome: cacheHome,
+            activationSettler: {
+                // `mobile: activateApp` returns while iOS is still animating
+                // from SpringBoard. A command issued immediately afterwards
+                // can therefore capture or interact with the outgoing frame.
+                try await Task.sleep(for: .milliseconds(500))
+            }
+        )
+    }
+
+    init(
+        client: AppiumClient,
+        preflight: DevicePreflight,
+        config: DeviceCapabilityConfig,
+        cacheHome: URL,
+        activationSettler: @escaping @Sendable () async throws -> Void
+    ) {
         self.client = client
         self.preflight = preflight
         self.config = config
         self.cacheHome = cacheHome
+        self.activationSettler = activationSettler
     }
 
     public static func live(
@@ -212,6 +235,7 @@ public struct AppleDeviceController: Sendable {
         try await client.withSession(capabilities: capabilities) { session in
             if let bundleId = bundleId?.trimmingCharacters(in: .whitespacesAndNewlines), !bundleId.isEmpty {
                 try await session.execute(script: "mobile: activateApp", args: [["bundleId": bundleId]])
+                try await activationSettler()
             }
             return try await operation(session)
         }
