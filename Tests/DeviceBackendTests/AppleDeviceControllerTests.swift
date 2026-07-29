@@ -9,12 +9,12 @@ import XCTest
 /// exact WebDriver request sequence and W3C payloads — the observable
 /// contract the real WebDriverAgent sees.
 final class AppleDeviceControllerTests: XCTestCase {
-    private let iPhoneUDID = "00008140-00096D5C0CEA801C"
-    private let tvUDID = "c311e5afe90ee702b80e8b64e1e12796e04e63a0"
+    private let iPhoneUDID = "00008110-001234567890001E"
+    private let tvUDID = "0123456789abcdef0123456789abcdef01234567"
     private var homesToClean: [URL] = []
 
     private let source = """
-    <XCUIElementTypeApplication type="XCUIElementTypeApplication" name="CATCHPLAY+" label="CATCHPLAY+" bundleId="com.catchplay.app" x="0" y="0" width="393" height="852">
+    <XCUIElementTypeApplication type="XCUIElementTypeApplication" name="Example App" label="Example App" bundleId="com.example.app" x="0" y="0" width="393" height="852">
       <XCUIElementTypeSearchField type="XCUIElementTypeSearchField" name="searchField" label="Search" value="" enabled="true" visible="true" x="20" y="80" width="353" height="36"/>
     </XCUIElementTypeApplication>
     """
@@ -26,7 +26,7 @@ final class AppleDeviceControllerTests: XCTestCase {
     }
 
     private func iPhone(state: String = "connected") -> Device {
-        Device(udid: iPhoneUDID, name: "CP 16 Pro Max", platform: .ios, state: state, runtime: "iOS 18.7.8", target: .device)
+        Device(udid: iPhoneUDID, name: "Test iPhone", platform: .ios, state: state, runtime: "iOS 18.7.8", target: .device)
     }
 
     private func makeController(
@@ -35,7 +35,8 @@ final class AppleDeviceControllerTests: XCTestCase {
         config: DeviceCapabilityConfig = DeviceCapabilityConfig(),
         wdaCache: WDADeviceCache = .disabled(),
         configResolver: AppleDeviceController.ConfigResolver? = nil,
-        activationSettler: @escaping @Sendable () async throws -> Void = {}
+        activationSettler: @escaping @Sendable () async throws -> Void = {},
+        actionSleeper: @escaping @Sendable (Double) async throws -> Void = { _ in }
     ) -> (AppleDeviceController, MockTransport) {
         let transport = MockTransport(responses: responses)
         let base = URL(string: "http://127.0.0.1:4788")!
@@ -52,7 +53,8 @@ final class AppleDeviceControllerTests: XCTestCase {
             cacheHome: home,
             wdaCache: wdaCache,
             configResolver: configResolver,
-            activationSettler: activationSettler
+            activationSettler: activationSettler,
+            actionSleeper: actionSleeper
         )
         return (controller, transport)
     }
@@ -97,6 +99,25 @@ final class AppleDeviceControllerTests: XCTestCase {
         XCTAssertEqual(items[2].duration, 50)
     }
 
+    func testTapHonorsPreAndPostDelay() async throws {
+        let probe = ActionSleepProbe()
+        let (controller, _) = makeController(
+            [statusOK(), sessionResponse(), emptyOK(), emptyOK()],
+            device: iPhone(),
+            actionSleeper: { await probe.record($0) }
+        )
+
+        _ = try await controller.tap(
+            udid: iPhoneUDID,
+            target: .point(x: 10, y: 20),
+            preDelay: 0.1,
+            postDelay: 0.2
+        )
+
+        let values = await probe.values
+        XCTAssertEqual(values, [0.1, 0.2])
+    }
+
     func testTapSelectorResolvesFreshSourceThenTapsCenter() async throws {
         let (controller, transport) = makeController(
             [statusOK(), sessionResponse(), valueResponse(source), emptyOK(), emptyOK()],
@@ -117,6 +138,37 @@ final class AppleDeviceControllerTests: XCTestCase {
         let actions = try decodeActions(requests[3])
         XCTAssertEqual(actions.actions.first?.actions.first?.x, 197) // 196.5 rounds to 197
         XCTAssertEqual(actions.actions.first?.actions.first?.y, 98)
+    }
+
+    func testTapSelectorPollsAfterNoMatchWhenWaitTimeoutIsActive() async throws {
+        let probe = ActionSleepProbe()
+        let emptySource = """
+        <XCUIElementTypeApplication type="XCUIElementTypeApplication" name="Example App" label="Example App" bundleId="com.example.app" x="0" y="0" width="393" height="852"/>
+        """
+        let (controller, transport) = makeController(
+            [
+                statusOK(), sessionResponse(),
+                valueResponse(emptySource), valueResponse(source),
+                emptyOK(), emptyOK(),
+            ],
+            device: iPhone(),
+            actionSleeper: { await probe.record($0) }
+        )
+
+        _ = try await controller.tap(
+            udid: iPhoneUDID,
+            target: .selector(DeviceSelector(id: "searchField")),
+            waitTimeout: 0.2,
+            pollInterval: 0.1
+        )
+
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(
+            requests.map { $0.url.path }.filter { $0.hasSuffix("/source") }.count,
+            2
+        )
+        let values = await probe.values
+        XCTAssertEqual(values, [0.1])
     }
 
     func testTapForwardsBundleIdAndActivatesApp() async throws {
@@ -163,6 +215,27 @@ final class AppleDeviceControllerTests: XCTestCase {
         XCTAssertEqual(items[2].duration, 250)
     }
 
+    func testSwipeHonorsPreAndPostDelay() async throws {
+        let probe = ActionSleepProbe()
+        let (controller, _) = makeController(
+            [statusOK(), sessionResponse(), emptyOK(), emptyOK()],
+            device: iPhone(),
+            actionSleeper: { await probe.record($0) }
+        )
+
+        try await controller.swipe(
+            udid: iPhoneUDID,
+            from: (x: 10, y: 20),
+            to: (x: 30, y: 400),
+            durationMs: 250,
+            preDelay: 0.3,
+            postDelay: 0.4
+        )
+
+        let values = await probe.values
+        XCTAssertEqual(values, [0.3, 0.4])
+    }
+
     // MARK: - describe-ui
 
     func testDescribeUIRendersAndWritesAliasCache() async throws {
@@ -199,7 +272,7 @@ final class AppleDeviceControllerTests: XCTestCase {
         XCTAssertEqual(body.text, "Inception")
     }
 
-    func testPasteSeedsPasteboardThenSendsKeys() async throws {
+    func testPasteSetsPhysicalClipboardThenSendsKeys() async throws {
         let (controller, transport) = makeController(
             [statusOK(), sessionResponse(), emptyOK(), elementResponse(id: "field-9"), emptyOK(), emptyOK()],
             device: iPhone()
@@ -211,9 +284,30 @@ final class AppleDeviceControllerTests: XCTestCase {
             "/session/session-1/element/active", "/session/session-1/element/field-9/value", "/session/session-1",
         ])
         let execute = try JSONDecoder().decode(ExecuteProbe.self, from: try XCTUnwrap(requests[2].body))
-        XCTAssertEqual(execute.script, "mobile: setPasteboard")
-        XCTAssertEqual(execute.args.first?["encoding"], "base64")
+        XCTAssertEqual(execute.script, "mobile: setClipboard")
+        XCTAssertEqual(execute.args.first?["contentType"], "plaintext")
         XCTAssertEqual(execute.args.first?["content"], Data("hi".utf8).base64EncodedString())
+    }
+
+    func testPasteReplaceClearsActiveElementBeforeSendingKeys() async throws {
+        let (controller, transport) = makeController(
+            [
+                statusOK(), sessionResponse(), emptyOK(),
+                elementResponse(id: "field-9"), emptyOK(), emptyOK(), emptyOK(),
+            ],
+            device: iPhone()
+        )
+
+        try await controller.paste(udid: iPhoneUDID, text: "replacement", replace: true)
+
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(requests.map { $0.url.path }, [
+            "/status", "/session", "/session/session-1/execute/sync",
+            "/session/session-1/element/active",
+            "/session/session-1/element/field-9/clear",
+            "/session/session-1/element/field-9/value",
+            "/session/session-1",
+        ])
     }
 
     // MARK: - screenshot
@@ -268,8 +362,8 @@ final class AppleDeviceControllerTests: XCTestCase {
             configResolver: { [iPhoneUDID] info in
                 XCTAssertEqual(info.udid, iPhoneUDID)
                 return DeviceCapabilityConfig(
-                    iosWDABundleId: "com.catchplay.WebDriverAgentRunner",
-                    xcodeOrgId: "MKK9DM2XD9",
+                    iosWDABundleId: "com.example.WebDriverAgentRunner",
+                    xcodeOrgId: "ZYXWV98765",
                     xcodeSigningId: "Apple Development"
                 )
             }
@@ -282,10 +376,10 @@ final class AppleDeviceControllerTests: XCTestCase {
             requests.first { $0.method == "POST" && $0.url.path == "/session" }
         ))
         XCTAssertEqual(session.capabilities.alwaysMatch.derivedDataPath, plan.derivedDataPath.path)
-        XCTAssertEqual(session.capabilities.alwaysMatch.xcodeOrgId, "MKK9DM2XD9")
+        XCTAssertEqual(session.capabilities.alwaysMatch.xcodeOrgId, "ZYXWV98765")
         XCTAssertEqual(
             session.capabilities.alwaysMatch.updatedWDABundleId,
-            "com.catchplay.WebDriverAgentRunner"
+            "com.example.WebDriverAgentRunner"
         )
     }
 
@@ -324,10 +418,10 @@ final class AppleDeviceControllerTests: XCTestCase {
         let session = try decodeSessionCaps(try XCTUnwrap(
             requests.first { $0.method == "POST" && $0.url.path == "/session" }
         ))
-        XCTAssertEqual(session.capabilities.alwaysMatch.xcodeOrgId, "MKK9DM2XD9")
+        XCTAssertEqual(session.capabilities.alwaysMatch.xcodeOrgId, "ZYXWV98765")
         XCTAssertEqual(
             session.capabilities.alwaysMatch.updatedWDABundleId,
-            "com.catchplay.WebDriverAgentRunner"
+            "com.example.WebDriverAgentRunner"
         )
         XCTAssertEqual(sequence.callCount, 2)
         let persisted = cache.resolvedConfig(
@@ -340,10 +434,10 @@ final class AppleDeviceControllerTests: XCTestCase {
             ),
             environment: [:]
         )
-        XCTAssertEqual(persisted.xcodeOrgId, "MKK9DM2XD9")
+        XCTAssertEqual(persisted.xcodeOrgId, "ZYXWV98765")
         XCTAssertEqual(
             persisted.iosWDABundleId,
-            "com.catchplay.WebDriverAgentRunner"
+            "com.example.WebDriverAgentRunner"
         )
     }
 
@@ -380,9 +474,9 @@ final class AppleDeviceControllerTests: XCTestCase {
             "a cache miss must not reuse a still-running WDA with a stale local signature"
         )
         XCTAssertEqual(repair.capabilities.alwaysMatch.derivedDataPath, plan.derivedDataPath.path)
-        XCTAssertEqual(repair.capabilities.alwaysMatch.xcodeOrgId, "MKK9DM2XD9")
+        XCTAssertEqual(repair.capabilities.alwaysMatch.xcodeOrgId, "ZYXWV98765")
         XCTAssertEqual(repair.capabilities.alwaysMatch.xcodeSigningId, "Apple Development")
-        XCTAssertEqual(repair.capabilities.alwaysMatch.updatedWDABundleId, "com.catchplay.WebDriverAgentRunner")
+        XCTAssertEqual(repair.capabilities.alwaysMatch.updatedWDABundleId, "com.example.WebDriverAgentRunner")
         XCTAssertNoThrow(try cache.readRecord(for: iPhoneUDID))
     }
 
@@ -421,7 +515,7 @@ final class AppleDeviceControllerTests: XCTestCase {
             repair.capabilities.alwaysMatch.derivedDataPath,
             cache.derivedDataPath(for: iPhoneUDID).path
         )
-        XCTAssertEqual(repair.capabilities.alwaysMatch.xcodeOrgId, "MKK9DM2XD9")
+        XCTAssertEqual(repair.capabilities.alwaysMatch.xcodeOrgId, "ZYXWV98765")
         let nextRun = cache.resolvedConfig(
             for: PhysicalDeviceInfo(
                 udid: iPhoneUDID,
@@ -432,10 +526,10 @@ final class AppleDeviceControllerTests: XCTestCase {
             ),
             environment: [:]
         )
-        XCTAssertEqual(nextRun.iosWDABundleId, "com.catchplay.WebDriverAgentRunner")
+        XCTAssertEqual(nextRun.iosWDABundleId, "com.example.WebDriverAgentRunner")
         XCTAssertEqual(
             nextRun.xcodeOrgId,
-            "MKK9DM2XD9",
+            "ZYXWV98765",
             "a successful repair must persist signing inputs even when host fingerprint metadata is unavailable"
         )
     }
@@ -537,8 +631,8 @@ final class AppleDeviceControllerTests: XCTestCase {
             osVersion: "18.7.8"
         )
         let persisted = cache.resolvedConfig(for: info, environment: [:])
-        XCTAssertEqual(persisted.iosWDABundleId, "com.catchplay.WebDriverAgentRunner")
-        XCTAssertEqual(persisted.xcodeOrgId, "MKK9DM2XD9")
+        XCTAssertEqual(persisted.iosWDABundleId, "com.example.WebDriverAgentRunner")
+        XCTAssertEqual(persisted.xcodeOrgId, "ZYXWV98765")
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: cache.recordFile(for: iPhoneUDID).path
         ))
@@ -627,8 +721,8 @@ final class AppleDeviceControllerTests: XCTestCase {
 
     private func iosSigningConfig() -> DeviceCapabilityConfig {
         DeviceCapabilityConfig(
-            iosWDABundleId: "com.catchplay.WebDriverAgentRunner",
-            xcodeOrgId: "MKK9DM2XD9",
+            iosWDABundleId: "com.example.WebDriverAgentRunner",
+            xcodeOrgId: "ZYXWV98765",
             xcodeSigningId: "Apple Development"
         )
     }
@@ -643,8 +737,8 @@ final class AppleDeviceControllerTests: XCTestCase {
             },
             artifactInspector: { _ in
                 .init(
-                    bundleIdentifier: "com.catchplay.WebDriverAgentRunner.xctrunner",
-                    teamIdentifier: "MKK9DM2XD9",
+                    bundleIdentifier: "com.example.WebDriverAgentRunner.xctrunner",
+                    teamIdentifier: "ZYXWV98765",
                     signedAt: Date(timeIntervalSince1970: 1_774_837_800),
                     provisioningExpiresAt: Date(timeIntervalSince1970: 1_806_373_800)
                 )
@@ -734,6 +828,14 @@ private actor ActivationSettleProbe {
 
     func record() {
         count += 1
+    }
+}
+
+private actor ActionSleepProbe {
+    private(set) var values: [Double] = []
+
+    func record(_ value: Double) {
+        values.append(value)
     }
 }
 

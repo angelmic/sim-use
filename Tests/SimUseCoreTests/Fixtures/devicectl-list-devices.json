@@ -8,34 +8,34 @@
   "result": {
     "devices": [
       {
-        "identifier": "B98CC0CB-CF18-5867-9595-869A35AFE502",
+        "identifier": "44444444-5555-6666-7777-888888888888",
         "connectionProperties": { "pairingState": "paired", "tunnelState": "connected" },
-        "deviceProperties": { "name": "CP 16 Pro Max", "osVersionNumber": "18.7.8" },
-        "hardwareProperties": { "deviceType": "iPhone", "platform": "iOS", "productType": "iPhone17,2", "udid": "00008140-00096D5C0CEA801C" }
+        "deviceProperties": { "name": "Test iPhone", "osVersionNumber": "18.7.8" },
+        "hardwareProperties": { "deviceType": "iPhone", "platform": "iOS", "productType": "iPhone17,2", "udid": "00008110-001234567890001E" }
       },
       {
-        "identifier": "979C9B98-CA56-564F-988D-621A6EDD4697",
+        "identifier": "11111111-2222-3333-4444-555555555555",
         "connectionProperties": { "pairingState": "paired", "tunnelState": "disconnected" },
-        "deviceProperties": { "name": "Richard iPhone", "osVersionNumber": "26.5.2" },
-        "hardwareProperties": { "deviceType": "iPhone", "platform": "iOS", "productType": "iPhone16,2", "udid": "00008130-001410193811401C" }
+        "deviceProperties": { "name": "Offline iPhone", "osVersionNumber": "26.5.2" },
+        "hardwareProperties": { "deviceType": "iPhone", "platform": "iOS", "productType": "iPhone16,2", "udid": "00008130-001111111111101C" }
       },
       {
-        "identifier": "AC19D319-4DDC-5906-A05E-853EAB5871B8",
+        "identifier": "22222222-3333-4444-5555-666666666666",
         "connectionProperties": { "pairingState": "paired", "tunnelState": "connected" },
-        "deviceProperties": { "name": "iPhone 11 Pro R", "osVersionNumber": "18.7.8" },
-        "hardwareProperties": { "deviceType": "iPhone", "platform": "iOS", "productType": "iPhone12,3", "udid": "00008030-00161DEC1102802E" }
+        "deviceProperties": { "name": "Lab iPhone", "osVersionNumber": "18.7.8" },
+        "hardwareProperties": { "deviceType": "iPhone", "platform": "iOS", "productType": "iPhone12,3", "udid": "00008030-002222222222802E" }
       },
       {
-        "identifier": "B1BFAB36-5574-5809-9946-6963BC5F39F4",
+        "identifier": "33333333-4444-5555-6666-777777777777",
         "connectionProperties": { "pairingState": "paired", "tunnelState": "unavailable" },
-        "deviceProperties": { "name": "書房", "osVersionNumber": "26.5" },
-        "hardwareProperties": { "deviceType": "appleTV", "platform": "tvOS", "productType": "AppleTV14,1", "udid": "00008110-000E3D101A89401E" }
+        "deviceProperties": { "name": "Offline Apple TV", "osVersionNumber": "26.5" },
+        "hardwareProperties": { "deviceType": "appleTV", "platform": "tvOS", "productType": "AppleTV14,1", "udid": "00008110-003333333333401E" }
       },
       {
-        "identifier": "4FFD0A09-EFD9-5AC1-84C5-0017593399A3",
+        "identifier": "55555555-6666-7777-8888-999999999999",
         "connectionProperties": { "pairingState": "paired", "tunnelState": "connected" },
-        "deviceProperties": { "name": "辦公桌tv理查", "osVersionNumber": "26.5" },
-        "hardwareProperties": { "deviceType": "appleTV", "platform": "tvOS", "productType": "AppleTV5,3", "udid": "c311e5afe90ee702b80e8b64e1e12796e04e63a0" }
+        "deviceProperties": { "name": "Test Apple TV", "osVersionNumber": "26.5" },
+        "hardwareProperties": { "deviceType": "appleTV", "platform": "tvOS", "productType": "AppleTV5,3", "udid": "0123456789abcdef0123456789abcdef01234567" }
       }
     ]
   }

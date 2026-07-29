@@ -52,7 +52,7 @@ struct ScreenshotForwarderTests {
     @Test("Physical Apple-device screenshot forwards the target bundle")
     func physicalDeviceForwardsTargetBundle() throws {
         let topLevel = try Screenshot.parse([
-            "--device", "00008140-00096D5C0CEA801C",
+            "--device", "00008110-001234567890001E",
             "--bundle-id", "com.example.App",
         ])
 

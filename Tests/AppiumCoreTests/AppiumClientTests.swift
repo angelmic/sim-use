@@ -13,7 +13,7 @@ final class AppiumClientTests: XCTestCase {
     private let caps = AppiumCapabilities(
         platformName: "iOS",
         automationName: "XCUITest",
-        udid: "00008140-00096D5C0CEA801C"
+        udid: "00008110-001234567890001E"
     )
 
     func testWithSessionCreatesRunsAndDeletesBuildingSessionURLs() async throws {
@@ -53,7 +53,7 @@ final class AppiumClientTests: XCTestCase {
         let envelope = try JSONDecoder().decode(SessionEnvelopeProbe.self, from: body)
         XCTAssertEqual(envelope.capabilities.alwaysMatch.platformName, "iOS")
         XCTAssertEqual(envelope.capabilities.alwaysMatch.automationName, "XCUITest")
-        XCTAssertEqual(envelope.capabilities.alwaysMatch.udid, "00008140-00096D5C0CEA801C")
+        XCTAssertEqual(envelope.capabilities.alwaysMatch.udid, "00008110-001234567890001E")
         XCTAssertEqual(envelope.capabilities.firstMatch, [[:]])
     }
 
@@ -74,6 +74,27 @@ final class AppiumClientTests: XCTestCase {
         let body = try JSONDecoder().decode(ExecuteProbe.self, from: try XCTUnwrap(execute.body))
         XCTAssertEqual(body.script, "mobile: pressButton")
         XCTAssertEqual(body.args, [["name": "menu"]])
+    }
+
+    func testClearElementUsesW3CEndpoint() async throws {
+        let transport = MockTransport(responses: [
+            sessionResponse(id: "s"),
+            emptyOK(), // clear
+            emptyOK(), // delete
+        ])
+        let client = AppiumClient(baseURL: url("http://127.0.0.1:4723"), transport: transport)
+
+        try await client.withSession(capabilities: caps) { session in
+            try await session.clear(elementID: "field-9")
+        }
+
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(requests.map(\.method), ["POST", "POST", "DELETE"])
+        XCTAssertEqual(requests.map { $0.url.path }, [
+            "/session",
+            "/session/s/element/field-9/clear",
+            "/session/s",
+        ])
     }
 
     func testLegacyMobileTapScriptsAreRejectedBeforeTransport() async throws {

@@ -9,7 +9,7 @@ import XCTest
 /// The physical Apple TV path: device preflight + xcodebuild-flow caps, no
 /// HID / simctl shortcuts, and the tvOS ≤16 `ui` fail-fast.
 final class TVOSDeviceControllerTests: XCTestCase {
-    private let tvUDID = "c311e5afe90ee702b80e8b64e1e12796e04e63a0"
+    private let tvUDID = "0123456789abcdef0123456789abcdef01234567"
     private var homesToClean: [URL] = []
 
     override func tearDown() {
@@ -19,7 +19,7 @@ final class TVOSDeviceControllerTests: XCTestCase {
     }
 
     private func device(major: Int, state: String = "connected") -> Device {
-        Device(udid: tvUDID, name: "辦公桌tv理查", platform: .tvos, state: state, runtime: "tvOS \(major).5", target: .device)
+        Device(udid: tvUDID, name: "Test Apple TV", platform: .tvos, state: state, runtime: "tvOS \(major).5", target: .device)
     }
 
     private func makeController(
@@ -69,7 +69,7 @@ final class TVOSDeviceControllerTests: XCTestCase {
     func testModernDeviceUsesSupervisorEndpointInsteadOfXcodebuildCaps() async throws {
         let provider = TVOSWDAEndpointProvider { info, bundleId, config in
             XCTAssertEqual(info.udid, self.tvUDID)
-            XCTAssertEqual(bundleId, "com.catchplay.AsiaPlay")
+            XCTAssertEqual(bundleId, "com.example.AsiaPlay")
             XCTAssertEqual(config.wdaRemotePort, nil)
             return URL(string: "http://127.0.0.1:8105")!
         }
@@ -82,7 +82,7 @@ final class TVOSDeviceControllerTests: XCTestCase {
         _ = try await controller.describeUI(
             udid: tvUDID,
             includeRaw: false,
-            bundleId: "com.catchplay.AsiaPlay"
+            bundleId: "com.example.AsiaPlay"
         )
 
         let requests = await transport.recordedRequests()

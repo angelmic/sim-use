@@ -33,6 +33,7 @@ public struct AppleDeviceController: Sendable {
     private let cacheHome: URL
     private let wdaCache: WDADeviceCache
     private let activationSettler: @Sendable () async throws -> Void
+    private let actionSleeper: @Sendable (Double) async throws -> Void
 
     public init(
         client: AppiumClient,
@@ -52,6 +53,9 @@ public struct AppleDeviceController: Sendable {
                 // from SpringBoard. A command issued immediately afterwards
                 // can therefore capture or interact with the outgoing frame.
                 try await Task.sleep(for: .milliseconds(500))
+            },
+            actionSleeper: { seconds in
+                try await Task.sleep(for: .seconds(seconds))
             }
         )
     }
@@ -63,7 +67,8 @@ public struct AppleDeviceController: Sendable {
         cacheHome: URL,
         wdaCache: WDADeviceCache = .disabled(),
         configResolver: ConfigResolver? = nil,
-        activationSettler: @escaping @Sendable () async throws -> Void
+        activationSettler: @escaping @Sendable () async throws -> Void,
+        actionSleeper: @escaping @Sendable (Double) async throws -> Void
     ) {
         self.client = client
         self.preflight = preflight
@@ -71,6 +76,7 @@ public struct AppleDeviceController: Sendable {
         self.cacheHome = cacheHome
         self.wdaCache = wdaCache
         self.activationSettler = activationSettler
+        self.actionSleeper = actionSleeper
     }
 
     public static func live(
@@ -88,6 +94,9 @@ public struct AppleDeviceController: Sendable {
             },
             activationSettler: {
                 try await Task.sleep(for: .milliseconds(500))
+            },
+            actionSleeper: { seconds in
+                try await Task.sleep(for: .seconds(seconds))
             }
         )
     }
@@ -131,7 +140,11 @@ public struct AppleDeviceController: Sendable {
         udid: String,
         target: DeviceTapTarget,
         bundleId: String? = nil,
-        holdMs: Int = 0
+        holdMs: Int = 0,
+        preDelay: Double? = nil,
+        postDelay: Double? = nil,
+        waitTimeout: Double = 0,
+        pollInterval: Double = 0.25
     ) async throws -> (x: Double, y: Double) {
         let info = try await preflight.run(udid: udid)
         try requireIOS(info, command: "tap")
@@ -146,7 +159,9 @@ public struct AppleDeviceController: Sendable {
                 config: config,
                 bundleId: bundleId
             ) { session in
-                try await session.performPointerActions(PointerAction.tap(x: x, y: y, holdMs: holdMs))
+                try await performTimedAction(preDelay: preDelay, postDelay: postDelay) {
+                    try await session.performPointerActions(PointerAction.tap(x: x, y: y, holdMs: holdMs))
+                }
             }
             return (x, y)
 
@@ -159,9 +174,11 @@ public struct AppleDeviceController: Sendable {
                 config: config,
                 bundleId: bundleId
             ) { session in
-                try await session.performPointerActions(
-                    PointerAction.tap(x: resolved.point.x, y: resolved.point.y, holdMs: holdMs)
-                )
+                try await performTimedAction(preDelay: preDelay, postDelay: postDelay) {
+                    try await session.performPointerActions(
+                        PointerAction.tap(x: resolved.point.x, y: resolved.point.y, holdMs: holdMs)
+                    )
+                }
             }
             return resolved.point
 
@@ -172,10 +189,16 @@ public struct AppleDeviceController: Sendable {
                 config: config,
                 bundleId: bundleId
             ) { session in
-                let result = try DeviceOutlineRenderer.render(source: try await session.source(), includeRaw: false)
-                let entry = try DeviceSelectorResolver.resolve(selector, in: result.entries, screen: result.screen)
+                let entry = try await resolveSelector(
+                    selector,
+                    session: session,
+                    waitTimeout: waitTimeout,
+                    pollInterval: pollInterval
+                )
                 let point = DeviceSelectorResolver.center(of: entry)
-                try await session.performPointerActions(PointerAction.tap(x: point.x, y: point.y, holdMs: holdMs))
+                try await performTimedAction(preDelay: preDelay, postDelay: postDelay) {
+                    try await session.performPointerActions(PointerAction.tap(x: point.x, y: point.y, holdMs: holdMs))
+                }
                 return point
             }
         }
@@ -188,7 +211,9 @@ public struct AppleDeviceController: Sendable {
         from: (x: Double, y: Double),
         to: (x: Double, y: Double),
         durationMs: Int,
-        bundleId: String? = nil
+        bundleId: String? = nil,
+        preDelay: Double? = nil,
+        postDelay: Double? = nil
     ) async throws {
         let info = try await preflight.run(udid: udid)
         try requireIOS(info, command: "swipe")
@@ -200,9 +225,11 @@ public struct AppleDeviceController: Sendable {
             config: config,
             bundleId: bundleId
         ) { session in
-            try await session.performPointerActions(
-                PointerAction.swipe(fromX: from.x, fromY: from.y, toX: to.x, toY: to.y, durationMs: durationMs)
-            )
+            try await performTimedAction(preDelay: preDelay, postDelay: postDelay) {
+                try await session.performPointerActions(
+                    PointerAction.swipe(fromX: from.x, fromY: from.y, toX: to.x, toY: to.y, durationMs: durationMs)
+                )
+            }
         }
     }
 
@@ -233,7 +260,8 @@ public struct AppleDeviceController: Sendable {
     public func paste(
         udid: String,
         text: String,
-        bundleId: String? = nil
+        bundleId: String? = nil,
+        replace: Bool = false
     ) async throws {
         let info = try await preflight.run(udid: udid)
         try requireIOS(info, command: "paste")
@@ -246,16 +274,19 @@ public struct AppleDeviceController: Sendable {
             config: config,
             bundleId: bundleId
         ) { session in
-            // Seed the device pasteboard (bypasses IME composition), then
-            // deliver the text into the focused field. WDA has no
-            // hardware-Cmd+V on a physical device, so the send is what
-            // actually lands the text; the pasteboard seed makes a
-            // subsequent in-app paste consistent.
+            // Seed the physical device clipboard through WDA, then deliver
+            // the text into the focused field. `mobile: setPasteboard` is a
+            // simctl-only Appium command; setClipboard proxies WDA's
+            // /wda/setPasteboard route on hardware. WDA has no hardware
+            // Cmd+V there, so sendKeys is what actually lands the text.
             try await session.execute(
-                script: "mobile: setPasteboard",
-                args: [["content": encoded, "encoding": "base64"]]
+                script: "mobile: setClipboard",
+                args: [["content": encoded, "contentType": "plaintext"]]
             )
             let element = try await session.activeElement()
+            if replace {
+                try await session.clear(elementID: element)
+            }
             try await session.sendKeys(text, elementID: element)
         }
     }
@@ -282,6 +313,52 @@ public struct AppleDeviceController: Sendable {
     }
 
     // MARK: - Helpers
+
+    private func performTimedAction(
+        preDelay: Double?,
+        postDelay: Double?,
+        action: () async throws -> Void
+    ) async throws {
+        if let preDelay, preDelay > 0 {
+            try await actionSleeper(preDelay)
+        }
+        try await action()
+        if let postDelay, postDelay > 0 {
+            try await actionSleeper(postDelay)
+        }
+    }
+
+    private func resolveSelector(
+        _ selector: DeviceSelector,
+        session: AppiumSession,
+        waitTimeout: Double,
+        pollInterval: Double
+    ) async throws -> Outline.Entry {
+        var remaining = waitTimeout
+        while true {
+            do {
+                let result = try DeviceOutlineRenderer.render(
+                    source: try await session.source(),
+                    includeRaw: false
+                )
+                return try DeviceSelectorResolver.resolve(
+                    selector,
+                    in: result.entries,
+                    screen: result.screen
+                )
+            } catch let error as DeviceSelectorError {
+                guard case .noMatch = error, remaining > 0 else {
+                    throw error
+                }
+                let delay = min(pollInterval, remaining)
+                guard delay > 0 else {
+                    throw error
+                }
+                try await actionSleeper(delay)
+                remaining -= delay
+            }
+        }
+    }
 
     private func capabilities(
         for info: PhysicalDeviceInfo,

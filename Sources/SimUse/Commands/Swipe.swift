@@ -22,13 +22,13 @@ struct Swipe: SimUseExecutableCommand {
 
     @OptionGroup var coordinates: SwipeCoordinateOptions
 
-    @Option(name: .customLong("coordinate-space"), help: "iOS only: 'native' (device-native portrait, the default) or 'ui' (visual space as printed by describe-ui; orientation-calibrated per command). Android coordinates are always display space, which already rotates with the UI — the flag is accepted and ignored there.")
+    @Option(name: .customLong("coordinate-space"), help: "iOS Simulator only: 'native' (device-native portrait, the default) or 'ui' (visual space as printed by describe-ui; orientation-calibrated per command). Physical iOS uses WDA display-space coordinates and rejects 'ui'. Android coordinates are always display space, which already rotates with the UI — the flag is accepted and ignored there.")
     var coordinateSpace: CoordinateSpace = .native
 
     @Option(name: .customLong("duration"), help: "Duration of the swipe in seconds.")
     var duration: Double?
 
-    @Option(name: .customLong("delta"), help: "Distance between touch points in pixels.")
+    @Option(name: .customLong("delta"), help: "iOS Simulator only: distance between interpolated touch points in pixels. Physical iOS W3C actions interpolate internally.")
     var delta: Double?
 
     @Option(name: .customLong("pre-delay"), help: "Delay before starting the swipe in seconds.")
@@ -107,6 +107,16 @@ struct Swipe: SimUseExecutableCommand {
     /// requested duration (300 ms when unspecified). tvOS is rejected by
     /// the controller with `TVOSCapabilityError`.
     private func executeAppleDevice() async throws -> ExecutionResult {
+        if coordinateSpace == .ui {
+            throw CLIError(
+                errorDescription: "--coordinate-space ui is not supported on physical Apple devices; WDA accepts display-space coordinates directly."
+            )
+        }
+        if delta != nil {
+            throw CLIError(
+                errorDescription: "--delta is not supported on physical Apple devices; W3C pointer actions interpolate the swipe."
+            )
+        }
         let coords = try resolvedCoordinates()
         let durationMs = duration.map { Int(($0 * 1000).rounded()) } ?? 300
         try await AppleDeviceController.live().swipe(
@@ -114,7 +124,9 @@ struct Swipe: SimUseExecutableCommand {
             from: (x: coords.startX, y: coords.startY),
             to: (x: coords.endX, y: coords.endY),
             durationMs: durationMs,
-            bundleId: bundleId
+            bundleId: bundleId,
+            preDelay: preDelay,
+            postDelay: postDelay
         )
         return ExecutionResult(coordinates: coords)
     }

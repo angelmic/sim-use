@@ -274,8 +274,8 @@ let package = Package(
             dependencies: ["SimUseCore"],
             path: "Tests/SimUseCoreTests",
             resources: [
-                // Real `devicectl list devices --json-output` capture used
-                // to unit-test AppleDeviceLister parsing without a device.
+                // Shape-preserving synthetic `devicectl list devices
+                // --json-output` fixture; never commit host device identity.
                 .copy("Fixtures")
             ]
         ),

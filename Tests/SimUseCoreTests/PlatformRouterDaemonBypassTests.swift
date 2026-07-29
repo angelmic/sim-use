@@ -10,8 +10,8 @@ import Testing
 /// Simulator UUID would trigger.)
 @Suite("PlatformRouter — daemon bypass")
 struct PlatformRouterDaemonBypassTests {
-    private let dashDevice = "00008140-00096D5C0CEA801C"
-    private let classicDevice = "c311e5afe90ee702b80e8b64e1e12796e04e63a0"
+    private let dashDevice = "00008110-001234567890001E"
+    private let classicDevice = "0123456789abcdef0123456789abcdef01234567"
     private let androidSerial = "R58N30ABCDE"
 
     @Test("physical Apple devices bypass the simulator daemon")

@@ -102,6 +102,10 @@ struct StreamVideo: SimUseExecutableCommand {
         switch PlatformRouter.resolve(udid: device.resolved) {
         case .android:
             return try await executeAndroid()
+        case .tvOSSim:
+            throw TVOSCapabilityError(command: "stream-video")
+        case .appleDevice:
+            throw DeviceBackendUnsupportedError(command: "stream-video", deviceId: device.resolved)
         case .iOSSim, .none:
             return try await executeIOSSim()
         }

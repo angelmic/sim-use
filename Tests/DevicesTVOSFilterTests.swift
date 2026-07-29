@@ -107,10 +107,10 @@ struct DevicesPhysicalDeviceFilterTests {
                                 state: Device.State.iosBooted, runtime: "iOS 26.0", target: .sim)
     private let tvosSim = Device(udid: "tvos-sim-1", name: "Apple TV 4K", platform: .tvos,
                                  state: Device.State.iosBooted, runtime: "tvOS 18.2", target: .sim)
-    private let connectedIPhone = Device(udid: "00008140-00096D5C0CEA801C", name: "CP 16 Pro Max", platform: .ios,
+    private let connectedIPhone = Device(udid: "00008110-001234567890001E", name: "Test iPhone", platform: .ios,
                                          state: Device.State.deviceConnected, runtime: "iOS 18.7.8", target: .device)
-    private let disconnectedIPhone = Device(udid: "00008130-001410193811401C", name: "Richard iPhone", platform: .ios,
+    private let disconnectedIPhone = Device(udid: "00008130-001111111111101C", name: "Offline iPhone", platform: .ios,
                                             state: "disconnected", runtime: "iOS 26.5.2", target: .device)
-    private let connectedAppleTV = Device(udid: "c311e5afe90ee702b80e8b64e1e12796e04e63a0", name: "辦公桌tv理查", platform: .tvos,
+    private let connectedAppleTV = Device(udid: "0123456789abcdef0123456789abcdef01234567", name: "Test Apple TV", platform: .tvos,
                                           state: Device.State.deviceConnected, runtime: "tvOS 26.5", target: .device)
 }

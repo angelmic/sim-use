@@ -8,15 +8,15 @@ import XCTest
 /// The fail-fast gate: a down server or an unreachable device must be
 /// rejected in-process, with a hint, before any session is attempted.
 final class DevicePreflightTests: XCTestCase {
-    private let iPhoneUDID = "00008140-00096D5C0CEA801C"
-    private let tvUDID = "c311e5afe90ee702b80e8b64e1e12796e04e63a0"
+    private let iPhoneUDID = "00008110-001234567890001E"
+    private let tvUDID = "0123456789abcdef0123456789abcdef01234567"
 
     private func iPhone(state: String = Device.State.deviceConnected) -> Device {
-        Device(udid: iPhoneUDID, name: "CP 16 Pro Max", platform: .ios, state: state, runtime: "iOS 18.7.8", target: .device)
+        Device(udid: iPhoneUDID, name: "Test iPhone", platform: .ios, state: state, runtime: "iOS 18.7.8", target: .device)
     }
 
     private func appleTV(state: String = Device.State.deviceConnected) -> Device {
-        Device(udid: tvUDID, name: "辦公桌tv理查", platform: .tvos, state: state, runtime: "tvOS 26.5", target: .device)
+        Device(udid: tvUDID, name: "Test Apple TV", platform: .tvos, state: state, runtime: "tvOS 26.5", target: .device)
     }
 
     private func preflight(

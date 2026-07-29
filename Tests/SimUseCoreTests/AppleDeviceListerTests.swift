@@ -3,10 +3,9 @@
 import Foundation
 import Testing
 
-/// Parsing is fixture-driven (a real `devicectl list devices --json-output`
-/// capture), so the test pins the exact shape Xcode emits without needing a
-/// device attached. The live enumeration is exercised by the integration
-/// test below, which skips when no device / tool is present.
+/// Parsing is fixture-driven with a shape-preserving synthetic
+/// `devicectl list devices --json-output` document, so the test pins Xcode's
+/// keys without committing host or device identity.
 @Suite("AppleDeviceLister — devicectl JSON parsing")
 struct AppleDeviceListerParseTests {
     private func fixture(_ name: String) throws -> Data {
@@ -29,16 +28,16 @@ struct AppleDeviceListerParseTests {
     func usesHardwareUDID() throws {
         let devices = try AppleDeviceLister.parseDevicectlJSON(fixture("devicectl-list-devices"))
         let udids = Set(devices.map(\.udid))
-        #expect(udids.contains("00008140-00096D5C0CEA801C"))
+        #expect(udids.contains("00008110-001234567890001E"))
         // The top-level `identifier` (CoreDevice UUID) must not leak through.
-        #expect(!udids.contains("B98CC0CB-CF18-5867-9595-869A35AFE502"))
+        #expect(!udids.contains("44444444-5555-6666-7777-888888888888"))
     }
 
     @Test("classifies the iPhone with iOS platform, runtime, and connected state")
     func classifiesIPhone() throws {
         let devices = try AppleDeviceLister.parseDevicectlJSON(fixture("devicectl-list-devices"))
-        let cp = try #require(devices.first { $0.udid == "00008140-00096D5C0CEA801C" })
-        #expect(cp.name == "CP 16 Pro Max")
+        let cp = try #require(devices.first { $0.udid == "00008110-001234567890001E" })
+        #expect(cp.name == "Test iPhone")
         #expect(cp.platform == .ios)
         #expect(cp.state == "connected")
         #expect(cp.runtime == "iOS 18.7.8")
@@ -49,8 +48,8 @@ struct AppleDeviceListerParseTests {
     @Test("classifies the Apple TV (classic 40-hex UDID) with tvOS platform")
     func classifiesAppleTV() throws {
         let devices = try AppleDeviceLister.parseDevicectlJSON(fixture("devicectl-list-devices"))
-        let tv = try #require(devices.first { $0.udid == "c311e5afe90ee702b80e8b64e1e12796e04e63a0" })
-        #expect(tv.name == "辦公桌tv理查")
+        let tv = try #require(devices.first { $0.udid == "0123456789abcdef0123456789abcdef01234567" })
+        #expect(tv.name == "Test Apple TV")
         #expect(tv.platform == .tvos)
         #expect(tv.runtime == "tvOS 26.5")
         #expect(tv.isUsable)
@@ -59,13 +58,13 @@ struct AppleDeviceListerParseTests {
     @Test("disconnected / unavailable devices parse but are not usable")
     func unreachableDevicesNotUsable() throws {
         let devices = try AppleDeviceLister.parseDevicectlJSON(fixture("devicectl-list-devices"))
-        let richard = try #require(devices.first { $0.name == "Richard iPhone" })
-        #expect(richard.state == "disconnected")
-        #expect(!richard.isUsable)
-        let study = try #require(devices.first { $0.name == "書房" })
-        #expect(study.platform == .tvos)
-        #expect(study.state == "unavailable")
-        #expect(!study.isUsable)
+        let offlinePhone = try #require(devices.first { $0.name == "Offline iPhone" })
+        #expect(offlinePhone.state == "disconnected")
+        #expect(!offlinePhone.isUsable)
+        let offlineTV = try #require(devices.first { $0.name == "Offline Apple TV" })
+        #expect(offlineTV.platform == .tvos)
+        #expect(offlineTV.state == "unavailable")
+        #expect(!offlineTV.isUsable)
     }
 
     @Test("malformed JSON throws")
@@ -79,7 +78,7 @@ struct AppleDeviceListerParseTests {
 @Suite("AppleDeviceLister — idevice_id merge / dedupe")
 struct AppleDeviceListerMergeTests {
     private let devicectlRows = [
-        Device(udid: "00008140-00096D5C0CEA801C", name: "CP 16 Pro Max",
+        Device(udid: "00008110-001234567890001E", name: "Test iPhone",
                platform: .ios, state: "connected", runtime: "iOS 18.7.8", target: .device),
     ]
 
@@ -87,17 +86,17 @@ struct AppleDeviceListerMergeTests {
     func dedupesOverlap() {
         let merged = AppleDeviceLister.mergeIdeviceIDUDIDs(
             into: devicectlRows,
-            udids: ["00008140-00096D5C0CEA801C"]
+            udids: ["00008110-001234567890001E"]
         )
         #expect(merged.count == 1)
         // The rich devicectl row wins over a bare idevice_id UDID.
-        #expect(merged[0].name == "CP 16 Pro Max")
+        #expect(merged[0].name == "Test iPhone")
     }
 
     @Test("a live USB overlap promotes a stale devicectl row without losing metadata")
     func promotesReachableOverlap() throws {
         let staleRows = [
-            Device(udid: "00008140-00096D5C0CEA801C", name: "CP 16 Pro Max",
+            Device(udid: "00008110-001234567890001E", name: "Test iPhone",
                    platform: .ios, state: "connecting", runtime: "iOS 18.7.8", target: .device),
             Device(udid: "OTHER", name: "Offline iPhone",
                    platform: .ios, state: "unavailable", runtime: "iOS 18.7", target: .device),
@@ -105,12 +104,12 @@ struct AppleDeviceListerMergeTests {
 
         let merged = AppleDeviceLister.mergeIdeviceIDUDIDs(
             into: staleRows,
-            udids: ["  00008140-00096D5C0CEA801C  ", ""]
+            udids: ["  00008110-001234567890001E  ", ""]
         )
 
         #expect(merged.count == 2)
-        let cp = try #require(merged.first { $0.udid == "00008140-00096D5C0CEA801C" })
-        #expect(cp.name == "CP 16 Pro Max")
+        let cp = try #require(merged.first { $0.udid == "00008110-001234567890001E" })
+        #expect(cp.name == "Test iPhone")
         #expect(cp.platform == .ios)
         #expect(cp.runtime == "iOS 18.7.8")
         #expect(cp.state == Device.State.deviceConnected)
@@ -124,10 +123,10 @@ struct AppleDeviceListerMergeTests {
     func addsIdeviceOnly() {
         let merged = AppleDeviceLister.mergeIdeviceIDUDIDs(
             into: devicectlRows,
-            udids: ["c311e5afe90ee702b80e8b64e1e12796e04e63a0"]
+            udids: ["0123456789abcdef0123456789abcdef01234567"]
         )
         #expect(merged.count == 2)
-        let extra = try? #require(merged.first { $0.udid == "c311e5afe90ee702b80e8b64e1e12796e04e63a0" })
+        let extra = try? #require(merged.first { $0.udid == "0123456789abcdef0123456789abcdef01234567" })
         #expect(extra?.target == .device)
         // idevice_id can't report platform; the fallback row is usable
         // (idevice_id only lists reachable USB devices).
@@ -142,16 +141,16 @@ struct AppleDeviceListerLiveTests {
     @Test("a live details probe promotes a stale paired Apple TV")
     func detailsProbePromotesAppleTV() throws {
         let officeTV = Device(
-            udid: "c311e5afe90ee702b80e8b64e1e12796e04e63a0",
-            name: "辦公桌tv理查",
+            udid: "0123456789abcdef0123456789abcdef01234567",
+            name: "Test Apple TV",
             platform: .tvos,
             state: "disconnected",
             runtime: "tvOS 26.5",
             target: .device
         )
         let unavailableTV = Device(
-            udid: "00008110-000E3D101A89401E",
-            name: "書房",
+            udid: "00008110-003333333333401E",
+            name: "Offline Apple TV",
             platform: .tvos,
             state: "unavailable",
             runtime: "tvOS 26.5",
@@ -163,17 +162,17 @@ struct AppleDeviceListerLiveTests {
             in: [officeTV, unavailableTV],
             devicectlDetailsProvider: { udid in
                 probed.append(udid)
-                return udid == "c311e5afe90ee702b80e8b64e1e12796e04e63a0"
+                return udid == "0123456789abcdef0123456789abcdef01234567"
                     ? Device.State.deviceConnected
                     : nil
             }
         )
 
-        let tv = try #require(devices.first { $0.name == "辦公桌tv理查" })
+        let tv = try #require(devices.first { $0.name == "Test Apple TV" })
         #expect(tv.state == Device.State.deviceConnected)
         #expect(tv.isUsable)
-        #expect(probed == ["c311e5afe90ee702b80e8b64e1e12796e04e63a0"])
-        let stillUnavailable = try #require(devices.first { $0.name == "書房" })
+        #expect(probed == ["0123456789abcdef0123456789abcdef01234567"])
+        let stillUnavailable = try #require(devices.first { $0.name == "Offline Apple TV" })
         #expect(stillUnavailable.state == "unavailable")
     }
 

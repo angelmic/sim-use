@@ -15,14 +15,9 @@
 # case red without a simulator in the loop (the Mac-side sim XCTest daemon is
 # deliberately never touched — this path is device-only).
 #
-# ---------------------------------------------------------------------------
-# SKIP semantics (requires-device)
-# ---------------------------------------------------------------------------
-# With no reachable target device the runner prints SKIP and exits 0, so a CI
-# gate on a host without hardware stays green instead of failing. A device is
-# considered absent when SIM_USE_E2E_FORCE_NO_DEVICE=1, when the target UDID is
-# not listed by `idevice_id -l`, or when devicectl does not report it as
-# connected.
+# By default, a missing device remains a clean SKIP for hardware-free CI.
+# Release gates pass `--require-device`, which turns the same state into a
+# non-zero failure and guarantees the run contains no skipped cases.
 #
 # ---------------------------------------------------------------------------
 # Preconditions when a device IS present (else the runner errors with the fix)
@@ -39,20 +34,21 @@
 #     incremental build/sign in the stable per-UDID DerivedData directory.
 #     The first successful session writes wda-signing-config.json, so later
 #     daily commands do not need the signing variables exported again.
-#   * Post the app-agnostic caps default (DeviceCapabilityConfig.iosWDABundleId
-#     ships as the upstream com.facebook.WebDriverAgentRunner), a CatchPlay
-#     device needs the WDA bundle id pinned — the runner exports
-#     SIM_USE_WDA_BUNDLE_ID (default com.catchplay.WebDriverAgentRunner) so the
-#     CLI signs/targets the intended WDA product. Override to re-point.
+#   * Explicit, repository-local signing values loaded at runtime from
+#     .sim-use-e2e.local.env (gitignored), or supplied in the environment:
+#       SIM_USE_DEVICE_UDID
+#       SIM_USE_PLAYGROUND_BUNDLE_ID
+#       SIM_USE_WDA_BUNDLE_ID
+#       SIM_USE_XCODE_ORG_ID
+#     The generic runner deliberately contains no developer/team/app defaults.
 #
 # Usage:
-#   scripts/test-runner-ios-device.sh            # build fixture + run all cases
-#   scripts/test-runner-ios-device.sh --no-build # skip CLI + fixture rebuild
+#   scripts/test-runner-ios-device.sh --require-device
+#   scripts/test-runner-ios-device.sh --require-device --no-build
 #   SIM_USE_E2E_FORCE_NO_DEVICE=1 scripts/test-runner-ios-device.sh  # SKIP path
-#   SIM_USE_DEVICE_UDID=<udid> scripts/test-runner-ios-device.sh     # other iPhone
 #
-# Exit codes: 0 = all green OR skipped (no device); 1 = an assertion failed or
-# a precondition with a device present is unmet.
+# Exit codes: 0 = all green, or optional mode skipped an absent device;
+# 1 = an assertion/precondition failed. Required mode never exits 0 on SKIP.
 
 set -euo pipefail
 
@@ -72,27 +68,28 @@ print_skip()    { echo -e "${YELLOW}⏭️  SKIP: $1${NC}"; }
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-UDID="${SIM_USE_DEVICE_UDID:-00008140-00096D5C0CEA801C}"   # CP 16 Pro Max
-BUNDLE_ID="${SIM_USE_PLAYGROUND_BUNDLE_ID:-com.catchplay.SimUsePlayground}"
-DEV_TEAM="${SIM_USE_XCODE_ORG_ID:-MKK9DM2XD9}"
-export SIM_USE_XCODE_ORG_ID="$DEV_TEAM"
+# shellcheck source=load-physical-device-e2e-config.sh
+source "$REPO_ROOT/scripts/load-physical-device-e2e-config.sh"
+sim_use_load_physical_device_e2e_config "$REPO_ROOT"
+
+UDID="${SIM_USE_DEVICE_UDID:-}"
 APPIUM_PORT="${SIM_USE_APPIUM_PORT:-4792}"
+export SIM_USE_WDA_LOCAL_PORT="${SIM_USE_WDA_LOCAL_PORT:-8110}"
+export SIM_USE_WDA_REMOTE_PORT="${SIM_USE_WDA_REMOTE_PORT:-8100}"
 PLAYGROUND_DIR="Playgrounds/iOS"
 PLAYGROUND_PROJECT="$PLAYGROUND_DIR/SimUsePlayground.xcodeproj"
 PLAYGROUND_SCHEME="SimUsePlayground"
-DERIVED_DATA=".build/PlaygroundiOS"
-EVIDENCE_DIR="${SIM_USE_E2E_EVIDENCE_DIR:-.scratch/xd-2.0/evidence/T4}"
-
-# D7 ships the app-agnostic upstream WDA id (com.facebook.WebDriverAgentRunner)
-# as the caps default on purpose. This runner is a local verification tool that
-# knows the office device's WebDriverAgent is CatchPlay-signed, so it pins that
-# id explicitly — the intended D7 usage, not a default rollback. Override the
-# env var to re-point at a differently-signed WDA.
-: "${SIM_USE_WDA_BUNDLE_ID:=com.catchplay.WebDriverAgentRunner}"
-export SIM_USE_WDA_BUNDLE_ID
+DERIVED_DATA="${SIM_USE_E2E_DERIVED_DATA:-.build/PlaygroundiOS}"
+EVIDENCE_DIR="${SIM_USE_E2E_EVIDENCE_DIR:-.build/e2e-ios-device/$(date -u +%Y%m%dT%H%M%SZ)}"
+WDA_STATE_HOME="${SIM_USE_WDA_STATE_HOME:-$EVIDENCE_DIR/wda-state-home}"
+if [[ "$WDA_STATE_HOME" != /* ]]; then
+    WDA_STATE_HOME="$REPO_ROOT/$WDA_STATE_HOME"
+fi
+export SIM_USE_WDA_STATE_HOME="$WDA_STATE_HOME"
 export APPIUM_HOME="${APPIUM_HOME:-$HOME/.appium}"
 
 SKIP_BUILD=false
+REQUIRE_DEVICE=false
 for arg in "$@"; do
     case "$arg" in
         -h|--help)
@@ -100,6 +97,7 @@ for arg in "$@"; do
             exit 0
             ;;
         --no-build) SKIP_BUILD=true ;;
+        --require-device) REQUIRE_DEVICE=true ;;
         *) print_error "Unknown option: $arg (see --help)"; exit 1 ;;
     esac
 done
@@ -107,13 +105,11 @@ done
 # --- assertion accounting ---------------------------------------------------
 PASS_COUNT=0
 FAIL_COUNT=0
-SKIP_COUNT=0
 FAILED_CASES=()
 
 step()  { echo; echo -e "${BLUE}── $1${NC}"; }
 pass()  { print_success "$1"; PASS_COUNT=$((PASS_COUNT + 1)); }
 fail()  { print_error "$1"; FAIL_COUNT=$((FAIL_COUNT + 1)); FAILED_CASES+=("$1"); }
-skip()  { print_skip "$1"; SKIP_COUNT=$((SKIP_COUNT + 1)); }
 
 # assert_contains <file> <needle> <case-msg>
 # Case red when <needle> is absent from <file>. Comparison logic lives here so
@@ -159,33 +155,66 @@ assert_elapsed_under() {
     fi
 }
 
-# --- device detection → SKIP (requires-device) ------------------------------
+# --- device detection: CoreDevice first, live USB fallback -----------------
 device_present() {
     [[ "${SIM_USE_E2E_FORCE_NO_DEVICE:-0}" == "1" ]] && return 1
-    command -v idevice_id >/dev/null 2>&1 || return 1
-    # Capture output into variables before grepping. Piping a chatty producer
-    # (devicectl) straight into `grep -q` trips `set -o pipefail`: grep exits on
-    # first match, the producer takes SIGPIPE (141), and the pipeline reports
-    # non-zero — which would misread a present device as absent.
-    local ids details
-    ids="$(idevice_id -l 2>/dev/null || true)"
-    grep -qx "$UDID" <<<"$ids" || return 1
-    # Cross-check the CoreDevice tunnel is up (USB paired + trusted).
+    local details ids
     details="$(xcrun devicectl device info details --device "$UDID" 2>/dev/null || true)"
-    grep -qiE 'tunnelState:[[:space:]]*connected' <<<"$details" || return 1
-    return 0
+    if grep -qiE 'tunnelState:[[:space:]]*connected' <<<"$details"; then
+        CONNECTION_METHOD="CoreDevice"
+        return 0
+    fi
+    if command -v idevice_id >/dev/null 2>&1; then
+        ids="$(idevice_id -l 2>/dev/null || true)"
+        if grep -qxF "$UDID" <<<"$ids"; then
+            CONNECTION_METHOD="USB fallback"
+            return 0
+        fi
+    fi
+    return 1
 }
 
-if ! device_present; then
-    if [[ "${SIM_USE_E2E_FORCE_NO_DEVICE:-0}" == "1" ]]; then
-        print_skip "SIM_USE_E2E_FORCE_NO_DEVICE=1 — device path not exercised."
-    else
-        print_skip "iPhone $UDID not connected (idevice_id / devicectl)."
+if [[ -z "$UDID" ]]; then
+    if [[ "$REQUIRE_DEVICE" == true ]]; then
+        print_error "Required iOS physical device is not connected: SIM_USE_DEVICE_UDID is unset."
+        exit 1
     fi
-    print_info "requires-device: connect the target iPhone or unset the override to run."
+    print_skip "SIM_USE_DEVICE_UDID is unset; optional physical-device path not exercised."
     exit 0
 fi
-print_success "Target device online: $UDID"
+
+CONNECTION_METHOD=""
+if ! device_present; then
+    if [[ "$REQUIRE_DEVICE" == true ]]; then
+        print_error "Required iOS physical device is not connected: $UDID."
+        print_info "Connect it through CoreDevice/RemoteXPC or USB, then re-run."
+        exit 1
+    elif [[ "${SIM_USE_E2E_FORCE_NO_DEVICE:-0}" == "1" ]]; then
+        print_skip "SIM_USE_E2E_FORCE_NO_DEVICE=1 — device path not exercised."
+    else
+        print_skip "iPhone $UDID is not connected through CoreDevice or USB."
+    fi
+    exit 0
+fi
+print_success "Target device online via $CONNECTION_METHOD: $UDID"
+
+require_environment() {
+    local name="$1"
+    if [[ -z "${!name:-}" ]]; then
+        print_error "$name is required for physical-device E2E."
+        exit 1
+    fi
+}
+
+require_environment SIM_USE_PLAYGROUND_BUNDLE_ID
+require_environment SIM_USE_WDA_BUNDLE_ID
+require_environment SIM_USE_XCODE_ORG_ID
+
+BUNDLE_ID="$SIM_USE_PLAYGROUND_BUNDLE_ID"
+DEV_TEAM="$SIM_USE_XCODE_ORG_ID"
+SIGNING_ID="${SIM_USE_XCODE_SIGNING_ID:-Apple Development}"
+export SIM_USE_WDA_BUNDLE_ID SIM_USE_XCODE_ORG_ID
+print_info "WDA ports: Mac $SIM_USE_WDA_LOCAL_PORT → device $SIM_USE_WDA_REMOTE_PORT"
 
 # --- resolve the sim-use binary ---------------------------------------------
 if [[ "$SKIP_BUILD" == false ]]; then
@@ -246,15 +275,13 @@ if [[ "$SKIP_BUILD" == false ]]; then
     command -v xcodegen >/dev/null 2>&1 || { print_error "xcodegen not found (brew install xcodegen)"; exit 1; }
     step "Generating + building $PLAYGROUND_SCHEME for device"
     (cd "$PLAYGROUND_DIR" && xcodegen generate | tail -1)
-    # project.yml ships CODE_SIGNING_ALLOWED=NO for the simulator; override on
-    # the command line (no fixture edit) to sign for the device. The upstream
-    # bundle id (com.cameroncooke.*) is not registerable under our team, so a
-    # CatchPlay-namespaced id is used and threaded through to launch + verbs.
+    # project.yml ships CODE_SIGNING_ALLOWED=NO for the simulator. Keep the
+    # committed fixture generic and inject every account-specific value here.
     xcodebuild \
         -project "$PLAYGROUND_PROJECT" -scheme "$PLAYGROUND_SCHEME" -configuration Debug \
         -destination "platform=iOS,id=$UDID" -derivedDataPath "$DERIVED_DATA" \
         CODE_SIGNING_ALLOWED=YES CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$DEV_TEAM" \
-        CODE_SIGN_IDENTITY="Apple Development" PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+        CODE_SIGN_IDENTITY="$SIGNING_ID" PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
         -allowProvisioningUpdates build | tail -2
 
     APP_PATH="$(find "$DERIVED_DATA/Build/Products" -name "$PLAYGROUND_SCHEME.app" -maxdepth 2 | head -1)"
@@ -265,8 +292,6 @@ if [[ "$SKIP_BUILD" == false ]]; then
 fi
 
 mkdir -p "$EVIDENCE_DIR"
-TMP="$(mktemp -d -t simuse-ios-device-e2e.XXXXXX)"
-trap 'rm -rf "$TMP"; cleanup' EXIT INT TERM
 
 # thin verb wrappers -> always target the device UDID
 ui()         { "$SIM_USE" ui --udid "$UDID" "$@"; }
@@ -278,98 +303,104 @@ screenshot() { "$SIM_USE" screenshot --udid "$UDID" "$@"; }
 
 DEAD_URL="http://127.0.0.1:4999"   # nothing listens here → fail-fast target
 
-# On a physical device only `ui` / `screenshot` forward `--bundle-id`, so only
-# they observe the app under test; the WDA session for an action verb resets to
-# the springboard (home screen). The tracer therefore observes the app through
-# `ui --bundle-id`, and exercises the action verbs against springboard until
-# T3.5 lands `--bundle-id` forwarding on tap/type/paste/swipe.
+launch_root() {
+    xcrun devicectl device process launch \
+        --terminate-existing --device "$UDID" "$BUNDLE_ID" >/dev/null
+    sleep 2
+}
+launch_screen() {
+    local screen="$1"
+    xcrun devicectl device process launch \
+        --terminate-existing --device "$UDID" "$BUNDLE_ID" \
+        --launch-arg "screen=$screen" >/dev/null
+    sleep 2
+}
 
-# ── case 1: describe-ui names a playground element (app-targeted) ───────────
-# Cold-launch the fixture to the foreground first (devicectl), then let
-# `ui --bundle-id` attach and describe it. `ui --bundle-id` alone occasionally
-# raced to the springboard, so the explicit launch makes the observation
-# deterministic. Assertions use app-unique strings ("sim-use Playground" nav
-# title, the "Text Input" row) so a springboard "SimUsePlayground" icon can't
-# false-positive the case.
+# ── case 1: describe-ui names a fixture element ─────────────────────────────
 step "ui — describe-ui outlines the SimUsePlayground menu"
-# --terminate-existing: activate semantics (T3.5) keeps the app's last screen
-# across sessions, so a leftover run would break the menu-outline assertions.
-xcrun devicectl device process launch --terminate-existing --device "$UDID" "$BUNDLE_ID" >/dev/null 2>&1 || true
-sleep 3
+launch_root
 ui --bundle-id "$BUNDLE_ID" > "$EVIDENCE_DIR/ui-menu.txt" 2>&1 || true
 assert_contains "$EVIDENCE_DIR/ui-menu.txt" "sim-use Playground" "ui: outline shows the playground nav title"
 assert_contains "$EVIDENCE_DIR/ui-menu.txt" "Text Input"         "ui: outline lists the Text Input row"
 
 # ── case 2: screenshot writes a non-empty PNG ───────────────────────────────
 step "screenshot — captures a non-empty PNG"
-screenshot --output "$EVIDENCE_DIR/screenshot.png" > "$EVIDENCE_DIR/screenshot.txt" 2>&1 || true
-assert_file_nonempty "$EVIDENCE_DIR/screenshot.png" "screenshot: PNG has bytes"
+SCREENSHOT_PATH="$EVIDENCE_DIR/screenshot.png"
+rm -f -- "$SCREENSHOT_PATH"
+screenshot --bundle-id "$BUNDLE_ID" --output "$SCREENSHOT_PATH" \
+    > "$EVIDENCE_DIR/screenshot.txt" 2>&1 || true
+assert_file_nonempty "$SCREENSHOT_PATH" "screenshot: PNG has bytes"
 
-# ── case 3: tap resolves a springboard selector and dispatches ──────────────
-# Prove tap end-to-end by resolving the fixture's own home-screen icon (a known
-# installed element) via the live AX tree and tapping it. A missing icon (or an
-# unresolved selector) turns the case red with WDA's candidate list.
-step "tap — resolve the fixture's home icon on springboard and tap it"
-tap --label "$PLAYGROUND_SCHEME" > "$EVIDENCE_DIR/tap.txt" 2>&1 || true
+# ── case 3: tap changes the fixture's visible screen ────────────────────────
+step "tap — opens the Text Input screen"
+tap --bundle-id "$BUNDLE_ID" --label "Text Input" \
+    --wait-timeout 2 --pre-delay 0.1 --post-delay 0.1 \
+    > "$EVIDENCE_DIR/tap.txt" 2>&1 || true
 assert_contains "$EVIDENCE_DIR/tap.txt" "completed successfully" "tap: selector resolved + tap dispatched"
+ui --bundle-id "$BUNDLE_ID" > "$EVIDENCE_DIR/ui-after-tap.txt" 2>&1 || true
+assert_contains "$EVIDENCE_DIR/ui-after-tap.txt" "Text Input Playground" "tap: fixture navigated to Text Input"
+assert_absent "$EVIDENCE_DIR/ui-after-tap.txt" "Gesture Presets" "tap: fixture left the main menu"
 
-# ── case 4: swipe dispatches a W3C pointer gesture ──────────────────────────
-step "swipe — a W3C pointer swipe completes"
-swipe --from 220,600 --to 220,300 --duration 0.3 > "$EVIDENCE_DIR/swipe.txt" 2>&1 || true
+# ── case 4: type is reflected in the focused field ──────────────────────────
+step "type — field echoes the typed token"
+TYPE_TOKEN="E2Etype$RANDOM"
+tap --bundle-id "$BUNDLE_ID" --id text-input-field > "$EVIDENCE_DIR/tap-field.txt" 2>&1 || true
+type_text --bundle-id "$BUNDLE_ID" "$TYPE_TOKEN" > "$EVIDENCE_DIR/type.txt" 2>&1 || true
+ui --bundle-id "$BUNDLE_ID" > "$EVIDENCE_DIR/ui-after-type.txt" 2>&1 || true
+assert_contains "$EVIDENCE_DIR/ui-after-type.txt" "$TYPE_TOKEN" "type: field echoes the typed token"
+
+# ── case 5: paste + --replace are reflected in the focused field ────────────
+step "paste — field echoes text and --replace removes the prior value"
+launch_screen paste-test
+tap --bundle-id "$BUNDLE_ID" --id paste-input-field > "$EVIDENCE_DIR/tap-paste-field.txt" 2>&1 || true
+PASTE_OLD_TOKEN="E2Eold$RANDOM"
+PASTE_NEW_TOKEN="E2Enew$RANDOM"
+paste_text --bundle-id "$BUNDLE_ID" "$PASTE_OLD_TOKEN" > "$EVIDENCE_DIR/paste.txt" 2>&1 || true
+paste_text --bundle-id "$BUNDLE_ID" --replace "$PASTE_NEW_TOKEN" \
+    > "$EVIDENCE_DIR/paste-replace.txt" 2>&1 || true
+ui --bundle-id "$BUNDLE_ID" > "$EVIDENCE_DIR/ui-after-paste.txt" 2>&1 || true
+assert_contains "$EVIDENCE_DIR/ui-after-paste.txt" "$PASTE_NEW_TOKEN" "paste: --replace leaves the replacement token"
+assert_absent "$EVIDENCE_DIR/ui-after-paste.txt" "$PASTE_OLD_TOKEN" "paste: --replace removes the prior token"
+
+# ── case 6: swipe moves the app's visible list window ───────────────────────
+step "swipe — lower menu rows become visible"
+launch_root
+swipe --bundle-id "$BUNDLE_ID" --from 220,750 --to 220,250 --duration 0.3 \
+    --pre-delay 0.1 --post-delay 0.1 \
+    > "$EVIDENCE_DIR/swipe.txt" 2>&1 || true
 assert_contains "$EVIDENCE_DIR/swipe.txt" "completed successfully" "swipe: gesture dispatched"
+ui --bundle-id "$BUNDLE_ID" > "$EVIDENCE_DIR/ui-after-swipe.txt" 2>&1 || true
+assert_contains "$EVIDENCE_DIR/ui-after-swipe.txt" "Batch Login Flow" "swipe: lower menu rows are visible"
 
-# ── case 5: fail-fast when the Appium server is down (instant) ──────────────
+# ── case 7: fail-fast when the Appium server is down (instant) ──────────────
 step "fail-fast — a down server returns instantly with ok:false"
 START=$(date +%s)
-SIM_USE_APPIUM_URL="$DEAD_URL" ui --json > "$EVIDENCE_DIR/failfast.txt" 2>&1 || true
+SIM_USE_APPIUM_URL="$DEAD_URL" ui --bundle-id "$BUNDLE_ID" --json \
+    > "$EVIDENCE_DIR/failfast.txt" 2>&1 || true
 ELAPSED=$(( $(date +%s) - START ))
 assert_contains      "$EVIDENCE_DIR/failfast.txt" '"ok":false'    "fail-fast: envelope reports ok:false"
 assert_contains      "$EVIDENCE_DIR/failfast.txt" "not reachable" "fail-fast: names the unreachable server"
 assert_elapsed_under 5 "$ELAPSED"                                 "fail-fast: returns without hanging"
 
-# ── type / paste: DeviceBackend wiring today, app round-trip reserved ───────
-# type/paste need a focused text field to echo into, which only the app under
-# test provides — and action verbs can't foreground it yet (no --bundle-id
-# forwarding; T3.5). So on a physical device they land on the field-less
-# springboard and error ("unable to find an element"). Until T3.5 we (a) prove
-# each verb reaches the DeviceBackend fail-fast path, and (b) reserve the app
-# round-trip behind SIM_USE_E2E_APP_ACTION_VERBS.
-step "type — wired to DeviceBackend fail-fast (app round-trip pending T3.5)"
+# Keep keyboard verbs pinned to the same fail-fast contract independently.
+step "type — a down server fails fast"
 START=$(date +%s)
-SIM_USE_APPIUM_URL="$DEAD_URL" type_text "wired?" --json > "$EVIDENCE_DIR/type-failfast.txt" 2>&1 || true
+SIM_USE_APPIUM_URL="$DEAD_URL" type_text --bundle-id "$BUNDLE_ID" "wired?" --json \
+    > "$EVIDENCE_DIR/type-failfast.txt" 2>&1 || true
 assert_contains      "$EVIDENCE_DIR/type-failfast.txt" '"ok":false' "type: routes to device + fail-fast ok:false"
 assert_elapsed_under 5 "$(( $(date +%s) - START ))"                 "type: fail-fast is instant"
 
-step "paste — wired to DeviceBackend fail-fast (app round-trip pending T3.5)"
+step "paste — a down server fails fast"
 START=$(date +%s)
-SIM_USE_APPIUM_URL="$DEAD_URL" paste_text "wired?" --json > "$EVIDENCE_DIR/paste-failfast.txt" 2>&1 || true
+SIM_USE_APPIUM_URL="$DEAD_URL" paste_text --bundle-id "$BUNDLE_ID" "wired?" --json \
+    > "$EVIDENCE_DIR/paste-failfast.txt" 2>&1 || true
 assert_contains      "$EVIDENCE_DIR/paste-failfast.txt" '"ok":false' "paste: routes to device + fail-fast ok:false"
 assert_elapsed_under 5 "$(( $(date +%s) - START ))"                  "paste: fail-fast is instant"
-
-if [[ "${SIM_USE_E2E_APP_ACTION_VERBS:-0}" == "1" ]]; then
-    # Enabled once T3.5 forwards --bundle-id to the action verbs. Finalised when
-    # that lands (per team decision:追加 commit, no ticket reopen).
-    step "type/paste — text echoes back in the focused field (app-targeted, T3.5)"
-    TYPE_TOKEN="E2Etype$RANDOM"; PASTE_TOKEN="E2Epaste$RANDOM"
-    tap  --bundle-id "$BUNDLE_ID" --label "Text Input"   >/dev/null 2>&1 || true
-    tap  --bundle-id "$BUNDLE_ID" --id text-input-field  >/dev/null 2>&1 || true
-    type_text  --bundle-id "$BUNDLE_ID" "$TYPE_TOKEN"    >/dev/null 2>&1 || true
-    ui   --bundle-id "$BUNDLE_ID" > "$EVIDENCE_DIR/ui-after-type.txt"  2>&1 || true
-    assert_contains "$EVIDENCE_DIR/ui-after-type.txt"  "$TYPE_TOKEN"  "type: field echoes the typed token"
-    # paste round-trip: known gap — device paste does not land in the field
-    # (type token stays; WDA pasteboard path needs WDA-foreground or another
-    # route). Tracked as a Phase-1 open item; keep the wiring case above green
-    # and skip the round-trip until the verb is fixed.
-    skip "paste app round-trip — known device-paste gap (field keeps prior value); see .scratch/xd-2.0/issues/README.md open items"
-else
-    skip "type/paste app round-trip — pending T3.5 (--bundle-id on action verbs); set SIM_USE_E2E_APP_ACTION_VERBS=1 to run"
-fi
 
 # --- summary ----------------------------------------------------------------
 echo
 echo -e "${BLUE}================ iOS device E2E results ================${NC}"
 print_success "$PASS_COUNT assertion(s) passed"
-[[ "$SKIP_COUNT" -gt 0 ]] && print_skip "$SKIP_COUNT case(s) skipped (see notes above)"
 if [[ "$FAIL_COUNT" -gt 0 ]]; then
     print_error "$FAIL_COUNT assertion(s) failed:"
     for c in "${FAILED_CASES[@]}"; do echo -e "   ${RED}• $c${NC}"; done

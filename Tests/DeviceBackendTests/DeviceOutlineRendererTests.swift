@@ -6,7 +6,7 @@ import XCTest
 
 final class DeviceOutlineRendererTests: XCTestCase {
     private let source = """
-    <XCUIElementTypeApplication type="XCUIElementTypeApplication" name="CATCHPLAY+" label="CATCHPLAY+" bundleId="com.catchplay.app" x="0" y="0" width="393" height="852">
+    <XCUIElementTypeApplication type="XCUIElementTypeApplication" name="Example App" label="Example App" bundleId="com.example.app" x="0" y="0" width="393" height="852">
       <XCUIElementTypeButton type="XCUIElementTypeButton" name="searchTab" label="Search" enabled="true" visible="true" x="100" y="800" width="60" height="40"/>
       <XCUIElementTypeSearchField type="XCUIElementTypeSearchField" name="searchField" label="Search movies" value="Inception" enabled="true" visible="true" x="20" y="80" width="353" height="36"/>
       <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" name="Home" label="Home" enabled="true" visible="true" x="20" y="810" width="50" height="20"/>
@@ -18,8 +18,8 @@ final class DeviceOutlineRendererTests: XCTestCase {
         let result = try DeviceOutlineRenderer.render(source: source, includeRaw: false)
         XCTAssertEqual(result.platform, .ios)
         XCTAssertEqual(result.screen, Outline.Frame(x: 0, y: 0, width: 393, height: 852))
-        XCTAssertEqual(result.appLabel, "CATCHPLAY+")
-        XCTAssertEqual(result.appPackage, "com.catchplay.app")
+        XCTAssertEqual(result.appLabel, "Example App")
+        XCTAssertEqual(result.appPackage, "com.example.app")
     }
 
     func testDropsInvisibleElements() throws {

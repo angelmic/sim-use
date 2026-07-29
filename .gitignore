@@ -101,3 +101,6 @@ Sources/SimUse/Resources/viewer/*
 # Python bytecode from eval harness.
 __pycache__/
 *.pyc
+
+# Developer-specific physical-device E2E identifiers and signing values.
+/.sim-use-e2e.local.env

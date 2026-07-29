@@ -26,7 +26,7 @@ final class WDADeviceCacheTests: XCTestCase {
         XCTAssertFalse(first.usePrebuiltWDA)
         XCTAssertEqual(first.missReason, .recordMissing)
         XCTAssertTrue(first.derivedDataPath.path.hasSuffix(
-            ".sim-use/c311e5afe90ee702b80e8b64e1e12796e04e63a0/wda-derived-data"
+            ".sim-use/0123456789abcdef0123456789abcdef01234567/wda-derived-data"
         ))
 
         try FileManager.default.createDirectory(
@@ -51,7 +51,7 @@ final class WDADeviceCacheTests: XCTestCase {
 
         XCTAssertEqual(plan.missReason, .recordMissing)
         XCTAssertEqual(plan.fingerprint?.platformName, "iOS")
-        XCTAssertEqual(plan.fingerprint?.bundleIdentifier, "com.catchplay.WebDriverAgentRunner")
+        XCTAssertEqual(plan.fingerprint?.bundleIdentifier, "com.example.WebDriverAgentRunner")
         XCTAssertEqual(plan.fingerprint?.scheme, "WebDriverAgentRunner")
         XCTAssertTrue(plan.runnerAppPath.path.hasSuffix(
             "Debug-iphoneos/WebDriverAgentRunner-Runner.app"
@@ -74,8 +74,8 @@ final class WDADeviceCacheTests: XCTestCase {
         ))
         let resolved = cache.resolvedConfig(for: iosInfo(), environment: [:])
 
-        XCTAssertEqual(resolved.iosWDABundleId, "com.catchplay.WebDriverAgentRunner")
-        XCTAssertEqual(resolved.xcodeOrgId, "MKK9DM2XD9")
+        XCTAssertEqual(resolved.iosWDABundleId, "com.example.WebDriverAgentRunner")
+        XCTAssertEqual(resolved.xcodeOrgId, "ZYXWV98765")
         XCTAssertEqual(resolved.xcodeSigningId, "Apple Development")
         let configFile = cache.signingConfigFile(for: iosInfo().udid)
         XCTAssertTrue(FileManager.default.fileExists(atPath: configFile.path))
@@ -130,8 +130,8 @@ final class WDADeviceCacheTests: XCTestCase {
         try cache.invalidate(udid: iosInfo().udid)
         let resolved = cache.resolvedConfig(for: iosInfo(), environment: [:])
 
-        XCTAssertEqual(resolved.iosWDABundleId, "com.catchplay.WebDriverAgentRunner")
-        XCTAssertEqual(resolved.xcodeOrgId, "MKK9DM2XD9")
+        XCTAssertEqual(resolved.iosWDABundleId, "com.example.WebDriverAgentRunner")
+        XCTAssertEqual(resolved.xcodeOrgId, "ZYXWV98765")
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: cache.signingConfigFile(for: iosInfo().udid).path
         ))
@@ -167,8 +167,8 @@ final class WDADeviceCacheTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: cache.signingConfigFile(for: iosInfo().udid).path
         ))
-        XCTAssertEqual(resolved.iosWDABundleId, "com.catchplay.WebDriverAgentRunner")
-        XCTAssertEqual(resolved.xcodeOrgId, "MKK9DM2XD9")
+        XCTAssertEqual(resolved.iosWDABundleId, "com.example.WebDriverAgentRunner")
+        XCTAssertEqual(resolved.xcodeOrgId, "ZYXWV98765")
         XCTAssertEqual(resolved.xcodeSigningId, "Apple Development")
     }
 
@@ -184,8 +184,8 @@ final class WDADeviceCacheTests: XCTestCase {
 
         let resolved = cache.resolvedConfig(for: iosInfo(), environment: [:])
 
-        XCTAssertEqual(resolved.iosWDABundleId, "com.catchplay.WebDriverAgentRunner")
-        XCTAssertEqual(resolved.xcodeOrgId, "MKK9DM2XD9")
+        XCTAssertEqual(resolved.iosWDABundleId, "com.example.WebDriverAgentRunner")
+        XCTAssertEqual(resolved.xcodeOrgId, "ZYXWV98765")
         XCTAssertEqual(resolved.xcodeSigningId, "Apple Development")
     }
 
@@ -204,8 +204,8 @@ final class WDADeviceCacheTests: XCTestCase {
 
         let resolved = cache.resolvedConfig(for: iosInfo(), environment: [:])
 
-        XCTAssertEqual(resolved.iosWDABundleId, "com.catchplay.WebDriverAgentRunner")
-        XCTAssertEqual(resolved.xcodeOrgId, "MKK9DM2XD9")
+        XCTAssertEqual(resolved.iosWDABundleId, "com.example.WebDriverAgentRunner")
+        XCTAssertEqual(resolved.xcodeOrgId, "ZYXWV98765")
     }
 
     func testSigningConfigRejectsWrongUDIDAndPlatform() throws {
@@ -299,8 +299,8 @@ final class WDADeviceCacheTests: XCTestCase {
 
         let expired = makeCache(home: home, artifactInspector: { [signedAt, now] _ in
             .init(
-                bundleIdentifier: "com.catchplay.wda.xctrunner",
-                teamIdentifier: "MKK9DM2XD9",
+                bundleIdentifier: "com.example.wda.xctrunner",
+                teamIdentifier: "ZYXWV98765",
                 signedAt: signedAt,
                 provisioningExpiresAt: now.addingTimeInterval(-1)
             )
@@ -309,8 +309,8 @@ final class WDADeviceCacheTests: XCTestCase {
 
         let missingExpiration = makeCache(home: home, artifactInspector: { [signedAt] _ in
             .init(
-                bundleIdentifier: "com.catchplay.wda.xctrunner",
-                teamIdentifier: "MKK9DM2XD9",
+                bundleIdentifier: "com.example.wda.xctrunner",
+                teamIdentifier: "ZYXWV98765",
                 signedAt: signedAt,
                 provisioningExpiresAt: nil
             )
@@ -331,7 +331,7 @@ final class WDADeviceCacheTests: XCTestCase {
 
         let wrongTeam = makeCache(home: home, artifactInspector: { [signedAt, now] _ in
             .init(
-                bundleIdentifier: "com.catchplay.wda.xctrunner",
+                bundleIdentifier: "com.example.wda.xctrunner",
                 teamIdentifier: "OTHERTEAM1",
                 signedAt: signedAt,
                 provisioningExpiresAt: now.addingTimeInterval(86_400)
@@ -342,7 +342,7 @@ final class WDADeviceCacheTests: XCTestCase {
         let wrongBundle = makeCache(home: home, artifactInspector: { [signedAt, now] _ in
             .init(
                 bundleIdentifier: "com.example.other.xctrunner",
-                teamIdentifier: "MKK9DM2XD9",
+                teamIdentifier: "ZYXWV98765",
                 signedAt: signedAt,
                 provisioningExpiresAt: now.addingTimeInterval(86_400)
             )
@@ -413,6 +413,26 @@ final class WDADeviceCacheTests: XCTestCase {
         )
     }
 
+    func testArtifactInspectionProcessDrainsStdoutAndStderrConcurrently() throws {
+        let result = try WDADeviceCache.runProcess(
+            executable: "/usr/bin/python3",
+            arguments: [
+                "-c",
+                """
+                import sys
+                sys.stderr.write("e" * 1_000_000)
+                sys.stderr.flush()
+                sys.stdout.write("ok")
+                """,
+            ],
+            environment: ProcessInfo.processInfo.environment
+        )
+
+        XCTAssertEqual(result.status, 0)
+        XCTAssertEqual(result.stdout, "ok")
+        XCTAssertEqual(result.stderr.utf8.count, 1_000_000)
+    }
+
     func testLiveMetadataFingerprintsConfiguredWDASourceInsteadOfFallingBackUnavailable() throws {
         let home = makeHome()
         let source = home.appendingPathComponent("fixture-wda", isDirectory: true)
@@ -473,11 +493,26 @@ final class WDADeviceCacheTests: XCTestCase {
         XCTAssertFalse(plan.usePrebuiltWDA)
     }
 
+    func testLiveCacheUsesRuntimeStateHome() {
+        let stateHome = makeHome()
+            .appendingPathComponent("task-owned-state", isDirectory: true)
+        let cache = WDADeviceCache.live(
+            environment: ["SIM_USE_WDA_STATE_HOME": stateHome.path]
+        )
+
+        XCTAssertEqual(
+            cache.directory(for: iosInfo().udid),
+            stateHome
+                .appendingPathComponent(".sim-use", isDirectory: true)
+                .appendingPathComponent(iosInfo().udid, isDirectory: true)
+        )
+    }
+
     // MARK: - Fixtures
 
     private func tvInfo() -> PhysicalDeviceInfo {
         PhysicalDeviceInfo(
-            udid: "c311e5afe90ee702b80e8b64e1e12796e04e63a0",
+            udid: "0123456789abcdef0123456789abcdef01234567",
             family: .tvos,
             osMajorVersion: 26,
             tunnelState: "connected",
@@ -487,7 +522,7 @@ final class WDADeviceCacheTests: XCTestCase {
 
     private func iosInfo() -> PhysicalDeviceInfo {
         PhysicalDeviceInfo(
-            udid: "00008140-00096D5C0CEA801C",
+            udid: "00008110-001234567890001E",
             family: .ios,
             osMajorVersion: 18,
             tunnelState: "connected",
@@ -497,16 +532,16 @@ final class WDADeviceCacheTests: XCTestCase {
 
     private func tvConfig() -> DeviceCapabilityConfig {
         DeviceCapabilityConfig(
-            tvosWDABundleId: "com.catchplay.wda",
-            xcodeOrgId: "MKK9DM2XD9",
+            tvosWDABundleId: "com.example.wda",
+            xcodeOrgId: "ZYXWV98765",
             xcodeSigningId: "Apple Development"
         )
     }
 
     private func iosConfig() -> DeviceCapabilityConfig {
         DeviceCapabilityConfig(
-            iosWDABundleId: "com.catchplay.WebDriverAgentRunner",
-            xcodeOrgId: "MKK9DM2XD9",
+            iosWDABundleId: "com.example.WebDriverAgentRunner",
+            xcodeOrgId: "ZYXWV98765",
             xcodeSigningId: "Apple Development"
         )
     }
@@ -514,8 +549,8 @@ final class WDADeviceCacheTests: XCTestCase {
     private func makeIOSCache(home: URL) -> WDADeviceCache {
         makeCache(home: home, artifactInspector: { [signedAt, now] _ in
             WDADeviceCache.Artifact(
-                bundleIdentifier: "com.catchplay.WebDriverAgentRunner.xctrunner",
-                teamIdentifier: "MKK9DM2XD9",
+                bundleIdentifier: "com.example.WebDriverAgentRunner.xctrunner",
+                teamIdentifier: "ZYXWV98765",
                 signedAt: signedAt,
                 provisioningExpiresAt: now.addingTimeInterval(86_400)
             )
@@ -532,8 +567,8 @@ final class WDADeviceCacheTests: XCTestCase {
     ) -> WDADeviceCache {
         let inspector = artifactInspector ?? { [signedAt, now] _ in
             WDADeviceCache.Artifact(
-                bundleIdentifier: "com.catchplay.wda.xctrunner",
-                teamIdentifier: "MKK9DM2XD9",
+                bundleIdentifier: "com.example.wda.xctrunner",
+                teamIdentifier: "ZYXWV98765",
                 signedAt: signedAt,
                 provisioningExpiresAt: now.addingTimeInterval(86_400)
             )

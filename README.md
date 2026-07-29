@@ -109,7 +109,11 @@ make build
 .build/debug/sim-use --help
 
 # Other Makefile targets
-make test    # run tests
+make test             # unit tests; no device required
+make e2e-ios          # iOS Simulator
+make e2e-tvos         # tvOS Simulator
+make e2e-ios-device   # strict physical iOS gate; explicit env below
+make e2e-tvos-device  # strict physical tvOS gate; explicit env below
 make clean
 ```
 
@@ -181,6 +185,11 @@ can seed the new signing config on its first reuse. With
 `SIM_USE_WDA_CACHE=0`, persisted signing inputs are ignored and sim-use
 retains the original installed-WDA behavior.
 
+Set `SIM_USE_WDA_STATE_HOME` to relocate the `.sim-use/<UDID>` WDA cache,
+DerivedData, signing record, and tvOS supervisor record for one process. The
+physical E2E runners set it to a task-owned directory under their evidence
+root, so validation cannot overwrite a long-lived xd installation's state.
+
 Physical-iOS taps and swipes use W3C `POST /session/<id>/actions` pointer
 sequences exclusively. sim-use rejects `mobile: tap` and
 `mobile: tapWithNumberOfTaps` before transport because XCUITest maps those
@@ -202,7 +211,64 @@ export SIM_USE_APPIUM_URL=http://127.0.0.1:4725
 export SIM_USE_TVOS_BUNDLE_ID=com.example.TVApp
 ```
 
-For a physical Apple TV on tvOS 17 or newer, keep a RemoteXPC tunnel running and set `SIM_USE_TVOS_WDA_BUNDLE_ID` to the already-installed, correctly signed WDA product id (without `.xctrunner`). With a target bundle id present, sim-use starts that runner through XCTest/testmanagerd, keeps one health-checked supervisor per UDID, and gives Appium an attach-only URL. This avoids a recurring host build/sign pass. State and timestamps live in `~/.sim-use/<UDID>/tvos-wda-supervisor.json`; set `SIM_USE_TVOS_WDA_SUPERVISOR=0` only to use the xcodebuild repair path.
+For a physical Apple TV on tvOS 17 or newer, set `SIM_USE_TVOS_WDA_BUNDLE_ID` to the correctly signed WDA product id (without `.xctrunner`). When `SIM_USE_TUNNEL_REGISTRY_PORT` points to a live RemoteXPC registry and a target bundle id is present, sim-use starts the installed runner through XCTest/testmanagerd, keeps one health-checked supervisor per UDID, and gives Appium an attach-only URL. Without that explicit registry, it falls back to Appium-managed WDA and the signing cache. Supervisor state and timestamps live in `~/.sim-use/<UDID>/tvos-wda-supervisor.json`; set `SIM_USE_TVOS_WDA_SUPERVISOR=0` to force the fallback even when a registry is configured.
+
+### Physical-device E2E gates
+
+The repository's physical runners contain no account, bundle, or device
+defaults. Copy the committed placeholder file to the gitignored local runtime
+configuration, fill in the values, then use the strict Make targets:
+
+```bash
+cp .sim-use-e2e.local.env.example .sim-use-e2e.local.env
+# Edit .sim-use-e2e.local.env with the real device/signing values.
+
+make e2e-ios-device
+make e2e-tvos-device
+```
+
+The tvOS target works without administrator access through Appium-managed WDA.
+To exercise the retained installed-runner supervisor instead, keep a registry
+alive in one terminal:
+
+```bash
+bash -c '
+  source scripts/load-physical-device-e2e-config.sh
+  sim_use_load_physical_device_e2e_config "$PWD"
+  exec sudo appium driver run xcuitest tunnel-creation \
+    --appletv-device-id "$SIM_USE_TVOS_DEVICE_UDID" \
+    --tunnel-registry-port 42314
+'
+```
+
+Then opt the gate into that registry from another terminal:
+
+```bash
+SIM_USE_TUNNEL_REGISTRY_PORT=42314 make e2e-tvos-device
+```
+
+The runners parse this file at script runtime as strict `KEY=value` data; they
+do not execute it as shell code. Set `SIM_USE_E2E_CONFIG_FILE` to use another
+path. A non-empty environment variable of the same name overrides the local
+file for one-off runs.
+
+Both runners prefer a live CoreDevice tunnel and fall back to a live
+`idevice_id -l` USB route. Their `--require-device` mode turns missing
+hardware into a failure and permits no skipped test cases. A reachable
+`SIM_USE_APPIUM_URL` is reused; otherwise the runner starts and later stops
+only its own Appium process. The tvOS runner first repairs/installs the signed
+WDA runner through the xcodebuild path. With an explicit
+`SIM_USE_TUNNEL_REGISTRY_PORT`, subsequent cases verify the retained
+supervisor and fail fast if the target is absent from that registry. Without
+the override, they verify the Appium-managed WDA/cache fallback instead. To
+avoid colliding with a long-lived local WDA proxy, the iOS and tvOS runners
+default their Mac-side WDA ports to `8110` and `8111`, respectively, while
+both devices keep WDA on `8100`. Override these with
+`SIM_USE_WDA_LOCAL_PORT` / `SIM_USE_WDA_REMOTE_PORT` when needed. Real
+identifiers remain in the ignored runtime configuration; the committed
+example and contract-test fixture contain synthetic values.
+Each runner also isolates `SIM_USE_WDA_STATE_HOME` under its evidence
+directory; an explicit environment value can choose another task-owned root.
 
 
 ## Commands
@@ -245,7 +311,13 @@ sim-use gesture scroll-down --pre-delay 0.5 --post-delay 1.0 --device $UDID
 
 `--pre-delay` / `--post-delay` / `--duration` work on `tap`, `swipe`, and `gesture` alike for coarse timing control.
 
-Single-finger presets (`scroll-*`, `swipe-from-*-edge`) name **visual** directions and are orientation-aware on iOS: their canvas size and rotation are auto-detected per command, so `scroll-up` scrolls the on-screen content up whether the device is portrait, landscape, or upside-down. Explicit `swipe`/`touch` coordinates remain device-native portrait space by default; pass `--coordinate-space ui` to give them in the visual space `ui` prints instead (orientation-calibrated per command; `touch` supports this in the atomic `--down --up` form only). Pinch/rotate presets remain untransformed. On Android the flag is accepted and ignored — display coordinates already rotate with the UI.
+Physical-iOS `tap` also honors selector polling (`--wait-timeout` /
+`--poll-interval`) and both action delays. Physical-iOS `swipe` honors the
+delays and duration. Simulator-only interpolation/orientation options
+(`--delta`, `--coordinate-space ui`) and two-finger taps fail explicitly on a
+physical device instead of being silently ignored.
+
+Single-finger presets (`scroll-*`, `swipe-from-*-edge`) name **visual** directions and are orientation-aware on iOS Simulator: their canvas size and rotation are auto-detected per command, so `scroll-up` scrolls the on-screen content up whether the simulator is portrait, landscape, or upside-down. Explicit Simulator `swipe`/`touch` coordinates remain device-native portrait space by default; pass `--coordinate-space ui` to give them in the visual space `ui` prints instead (orientation-calibrated per command; `touch` supports this in the atomic `--down --up` form only). Physical iOS WDA accepts display-space coordinates directly. Pinch/rotate presets remain untransformed. On Android the flag is accepted and ignored — display coordinates already rotate with the UI.
 
 ### tvOS focus navigation
 
@@ -279,13 +351,19 @@ sim-use type --file input.txt --device $UDID
 
 ```bash
 sim-use paste 'ABC 日本語 🎉' --device $UDID             # at caret
-sim-use paste 'new content' --replace --device $UDID   # Cmd+A + paste
+sim-use paste 'new content' --replace --device $UDID   # replace current field content
 
 printf '%s' "$CONTENT" | sim-use paste --stdin --device $UDID
 sim-use paste --file body.txt --device $UDID
 ```
 
-The default Cmd+V path needs a connected hardware keyboard on the simulator (Simulator.app: I/O > Keyboard > Connect Hardware Keyboard = ON). Under soft-keyboard-only mode HID Cmd+V is dropped — switch to `--via-menu`, which long-presses the target and taps the iOS edit-menu "Paste" button:
+On a physical iPhone, the same verb seeds WDA's device clipboard and sends
+text to the active element; `--replace` clears that element through the W3C
+endpoint first. The Simulator default Cmd+V path needs a connected hardware
+keyboard (Simulator.app: I/O > Keyboard > Connect Hardware Keyboard = ON).
+Under soft-keyboard-only mode HID Cmd+V is dropped — switch to `--via-menu`,
+which is Simulator-only and long-presses the target before tapping the iOS
+edit-menu "Paste" button:
 
 ```bash
 sim-use paste 'ABC 日本語' --via-menu --target-id chatTextField --device $UDID
@@ -439,12 +517,12 @@ sim-use daemon stop --all
 SIM_USE_NO_DAEMON=1 sim-use ui --device $UDID
 ```
 
-Daemons self-exit after 600 s of idle and log to `/tmp/sim-use-<uid>/<UDID>.log`. Streaming commands (`screenshot`, `record-video`, `stream-video`) always run in-process regardless. tvOS commands also stay in-process because each operation owns a short-lived Appium session. On modern physical Apple TV, only the Appium session is short-lived: the per-UDID XCTest/WDA supervisor remains healthy for reuse (seven days by default).
+Daemons self-exit after 600 s of idle and log to `/tmp/sim-use-<uid>/<UDID>.log`. Streaming commands (`screenshot`, `record-video`, `stream-video`) always run in-process regardless. tvOS commands also stay in-process because each operation owns a short-lived Appium session. On modern physical Apple TV, an explicitly configured tunnel registry enables the per-UDID XCTest/WDA supervisor, which remains healthy for reuse (seven days by default); otherwise Appium manages WDA for each command and reuses the signing cache.
 
 
 ## Architecture
 
-sim-use drives iOS Simulators through the lower-level XCFrameworks of Facebook's [idb](https://github.com/facebook/idb) (statically linked), Apple's Accessibility APIs, and the simulator HID pipeline. tvOS uses Appium's XCUITest driver for WebDriver source, screenshots, and Siri Remote button events; every command creates and closes its own Appium session, while modern physical Apple TV reuses a health-checked XCTest/WDA supervisor. Android devices are driven through an on-device bridge APK that exposes the AccessibilityService tree and input injection over HTTP, tunnelled via `adb forward`. Everything ships as a single binary; every command supports `--json` for machine consumption.
+sim-use drives iOS Simulators through the lower-level XCFrameworks of Facebook's [idb](https://github.com/facebook/idb) (statically linked), Apple's Accessibility APIs, and the simulator HID pipeline. tvOS uses Appium's XCUITest driver for WebDriver source, screenshots, and Siri Remote button events; every command creates and closes its own Appium session. A modern physical Apple TV reuses a health-checked XCTest/WDA supervisor when a tunnel registry is explicitly configured, and otherwise uses Appium-managed WDA with the signing cache. Android devices are driven through an on-device bridge APK that exposes the AccessibilityService tree and input injection over HTTP, tunnelled via `adb forward`. Everything ships as a single binary; every command supports `--json` for machine consumption.
 
 
 ## Viewer

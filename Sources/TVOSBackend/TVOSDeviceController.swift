@@ -118,12 +118,12 @@ public struct TVOSDeviceController: Sendable {
     ) async throws -> Result {
         let resolved = resolvedBundleId(bundleId)
 
-        // Modern tvOS has an installed-runner fast path that sim-use owns:
-        // launch it as a real XCTest through testmanagerd, keep that
-        // lifecycle alive, and give Appium only its local URL. This avoids
-        // Appium's bare ProcessControl preinstalled launch (which exits
-        // immediately on tvOS) and avoids an xcodebuild/sign pass when the
-        // installed signature is still valid.
+        // With an explicit tunnel registry, modern tvOS has an
+        // installed-runner fast path that sim-use owns: launch it as a real
+        // XCTest through testmanagerd, keep that lifecycle alive, and give
+        // Appium only its local URL. With no registry the provider returns
+        // nil and the normal Appium-managed WDA/signing-cache path below owns
+        // the lifecycle instead.
         if let resolved,
            let endpoint = try await wdaEndpointProvider.endpoint(
                for: info,

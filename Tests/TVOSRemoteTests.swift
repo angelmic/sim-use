@@ -378,6 +378,10 @@ struct TVOSRemoteTests {
     /// navigation state. Mirrors TestHelpers.launchPlaygroundApp.
     private func launchFixture(screen: String) async throws {
         let udid = try #require(tvosSimulatorUDID)
+        // A cold first Appium session starts WDA and auto-launches the target
+        // bundle without our process arguments. Prime that session before the
+        // deterministic relaunch so it cannot replace `screen=...` with root.
+        _ = try await runTVOSCommand("tvos ui --device \(udid) --bundle-id \(bundleID)")
         _ = try await CommandRunner.run("xcrun simctl terminate \(udid) \(bundleID)", allowFailure: true)
         try await Task.sleep(nanoseconds: 500_000_000)
         _ = try await CommandRunner.run("xcrun simctl launch \(udid) \(bundleID) --launch-arg \"screen=\(screen)\"")

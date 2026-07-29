@@ -69,16 +69,18 @@ After any non-trivial change, at minimum:
 
 ## Module layout
 
-Six SwiftPM targets; dependency graph flows in one direction.
+Eight SwiftPM source targets; dependency graph flows in one direction.
 
 | Target | Path | Depends on |
 |---|---|---|
 | `SimUseCore` | `Sources/SimUseCore/` | Foundation + ArgumentParser |
 | `SimUseVideo` | `Sources/SimUseVideo/` | SimUseCore + AVFoundation/ImageIO |
+| `AppiumCore` | `Sources/AppiumCore/` | SimUseCore |
+| `DeviceBackend` | `Sources/DeviceBackend/` | SimUseCore + AppiumCore |
 | `iOSSimBackend` | `Sources/iOSSimBackend/` | SimUseCore + SimUseVideo + FB* XCFrameworks + AVFoundation |
 | `AndroidBackend` | `Sources/AndroidBackend/` | SimUseCore + SimUseVideo + ArgumentParser |
-| `TVOSBackend` | `Sources/TVOSBackend/` | SimUseCore + ArgumentParser |
-| `SimUse` (executable) | `Sources/SimUse/` | SimUseCore + SimUseVideo + iOSSimBackend + AndroidBackend + TVOSBackend + FB* |
+| `TVOSBackend` | `Sources/TVOSBackend/` | SimUseCore + AppiumCore + DeviceBackend + ArgumentParser |
+| `SimUse` (executable) | `Sources/SimUse/` | SimUseCore + SimUseVideo + iOSSimBackend + AndroidBackend + TVOSBackend + DeviceBackend + FB* |
 
 `SimUseVideo` holds the platform-neutral host-side video plumbing (H.264 Annex B parsing, passthrough muxing, `AVAssetWriter` encoding, frame utilities) shared by the iOS and Android recording/streaming paths. It must stay FB*-free — anything that needs FBSimulatorControl belongs in `iOSSimBackend` (e.g. the `VideoFrameUtilities.captureScreenshotData` extension), anything adb-shaped in `AndroidBackend`.
 

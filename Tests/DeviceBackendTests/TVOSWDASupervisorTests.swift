@@ -4,12 +4,40 @@ import XCTest
 @testable import DeviceBackend
 
 final class TVOSWDASupervisorTests: XCTestCase {
+    func testMissingRegistryOverrideFallsBackToAppiumManagedWDA() async throws {
+        let provider = TVOSWDAEndpointProvider.live(
+            environment: ["SIM_USE_TVOS_WDA_SUPERVISOR": "1"],
+            home: URL(
+                fileURLWithPath: "/tmp/sim-use-supervisor-no-registry-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        )
+        let info = PhysicalDeviceInfo(
+            udid: "0123456789abcdef0123456789abcdef01234567",
+            family: .tvos,
+            osMajorVersion: 26,
+            tunnelState: "connected",
+            osVersion: "26.5"
+        )
+
+        let endpoint = try await provider.endpoint(
+            for: info,
+            targetBundleId: "com.example.AsiaPlay",
+            config: DeviceCapabilityConfig(
+                tvosWDABundleId: "com.example.wda",
+                xcodeOrgId: "TEAMID1234"
+            )
+        )
+
+        XCTAssertNil(endpoint)
+    }
+
     func testPlanUsesRemotePortForRunnerAndLocalPortForAppiumURL() throws {
         let root = URL(fileURLWithPath: "/tmp/sim-use-supervisor-fixture", isDirectory: true)
         let plan = TVOSWDASupervisorPlan(
-            udid: "c311e5afe90ee702b80e8b64e1e12796e04e63a0",
-            targetBundleId: "com.catchplay.AsiaPlay",
-            wdaBundleId: "com.catchplay.wda",
+            udid: "0123456789abcdef0123456789abcdef01234567",
+            targetBundleId: "com.example.AsiaPlay",
+            wdaBundleId: "com.example.wda",
             xctestBundleId: "WebDriverAgentRunner_tvOS",
             localPort: 8105,
             remotePort: 8100,
@@ -21,14 +49,14 @@ final class TVOSWDASupervisorTests: XCTestCase {
             stateDirectory: root
         )
 
-        XCTAssertEqual(plan.runnerBundleId, "com.catchplay.wda.xctrunner")
+        XCTAssertEqual(plan.runnerBundleId, "com.example.wda.xctrunner")
         XCTAssertEqual(plan.wdaURL.absoluteString, "http://127.0.0.1:8105")
         XCTAssertEqual(plan.launchEnvironment["USE_PORT"], "8100")
         XCTAssertEqual(plan.launchEnvironment["MJPEG_SERVER_PORT"], "9100")
         XCTAssertEqual(plan.processEnvironment["APPIUM_TUNNEL_REGISTRY_PORT"], "42315")
         XCTAssertEqual(plan.processEnvironment["NODE_NO_WARNINGS"], "1")
         XCTAssertTrue(plan.arguments.contains("/opt/appium-ios-remotexpc/build/src/index.js"))
-        XCTAssertTrue(plan.arguments.contains("com.catchplay.AsiaPlay"))
+        XCTAssertTrue(plan.arguments.contains("com.example.AsiaPlay"))
         XCTAssertTrue(plan.arguments.contains("WebDriverAgentRunner_tvOS"))
     }
 

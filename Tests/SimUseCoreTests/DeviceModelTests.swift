@@ -134,10 +134,10 @@ final class DeviceModelTests: XCTestCase {
     func testConnectedPhysicalDeviceIsUsable() {
         // A physical device is never "Booted"; usability keys off the
         // devicectl tunnel state instead.
-        let iphone = Device(udid: "00008140-00096D5C0CEA801C", name: "CP 16 Pro Max",
+        let iphone = Device(udid: "00008110-001234567890001E", name: "Test iPhone",
                             platform: .ios, state: Device.State.deviceConnected, runtime: "iOS 18.7.8", target: .device)
         XCTAssertTrue(iphone.isUsable)
-        let appleTV = Device(udid: "c311e5afe90ee702b80e8b64e1e12796e04e63a0", name: "辦公桌tv理查",
+        let appleTV = Device(udid: "0123456789abcdef0123456789abcdef01234567", name: "Test Apple TV",
                              platform: .tvos, state: Device.State.deviceConnected, runtime: "tvOS 26.5", target: .device)
         XCTAssertTrue(appleTV.isUsable)
     }

@@ -83,21 +83,21 @@ final class DeviceCapabilitiesTests: XCTestCase {
 
     func testTVOSModernExternalSupervisorOmitsXcodebuildAndPortCapabilities() throws {
         var cfg = config
-        cfg.tvosWDABundleId = "com.catchplay.wda"
+        cfg.tvosWDABundleId = "com.example.wda"
         cfg.xcodeOrgId = "TEAMID1234"
         cfg.wdaLocalPort = 8105
         cfg.wdaRemotePort = 8100
 
         let caps = try DeviceCapabilityBuilder.capabilities(
             for: info(family: .tvos, major: 26),
-            bundleId: "com.catchplay.AsiaPlay",
+            bundleId: "com.example.AsiaPlay",
             config: cfg,
             externalWDAURL: "http://127.0.0.1:8105"
         )
         let wire = try encoded(caps)
 
         XCTAssertEqual(wire["appium:webDriverAgentUrl"] as? String, "http://127.0.0.1:8105")
-        XCTAssertEqual(wire["appium:bundleId"] as? String, "com.catchplay.AsiaPlay")
+        XCTAssertEqual(wire["appium:bundleId"] as? String, "com.example.AsiaPlay")
         for absent in [
             "appium:usePreinstalledWDA",
             "appium:usePrebuiltWDA",
@@ -125,7 +125,7 @@ final class DeviceCapabilitiesTests: XCTestCase {
             }
             let hint = (error as? HintProviding)?.hint ?? ""
             XCTAssertTrue(hint.contains("SIM_USE_XCODE_ORG_ID"))
-            XCTAssertFalse(hint.contains("MKK9DM2XD9"), "hint must not carry a specific team id")
+            XCTAssertFalse(hint.contains("ZYXWV98765"), "hint must not carry a specific team id")
         }
     }
 

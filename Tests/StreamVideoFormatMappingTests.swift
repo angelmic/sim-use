@@ -3,6 +3,7 @@ import Testing
 @testable import SimUse
 import iOSSimBackend
 import AndroidBackend
+import SimUseCore
 
 /// Pins the top-level `stream-video` format union: the shared JPEG
 /// formats map onto both backends, while the platform-exclusive ones
@@ -46,6 +47,25 @@ struct StreamVideoFormatMappingTests {
     func h264Parses() throws {
         let command = try StreamVideo.parse(["--format", "h264", "--udid", "emulator-5554"])
         #expect(command.format == .h264)
+    }
+
+    @Test("physical Apple devices reject stream-video before backend side effects")
+    func physicalAppleDeviceIsRejected() async throws {
+        let deviceID = "00008110-001234567890001E"
+        var command = try StreamVideo.parse(["--device", deviceID])
+        command.device.resolved = deviceID
+
+        do {
+            _ = try await command.execute()
+            Issue.record("expected DeviceBackendUnsupportedError")
+        } catch let error as DeviceBackendUnsupportedError {
+            #expect(error == DeviceBackendUnsupportedError(
+                command: "stream-video",
+                deviceId: deviceID
+            ))
+        } catch {
+            Issue.record("expected DeviceBackendUnsupportedError, got \(type(of: error))")
+        }
     }
 
     // stdout carries the raw video bytes, so the summary envelope can

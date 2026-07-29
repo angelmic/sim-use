@@ -285,8 +285,12 @@ public struct WDADeviceCache: Sendable {
 
     public static func live(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        home: URL = FileManager.default.homeDirectoryForCurrentUser
+        home: URL? = nil
     ) -> WDADeviceCache {
+        let resolvedHome = resolvedStateHome(
+            environment: environment,
+            explicitHome: home
+        )
         let disabledValues = ["0", "false", "no", "off"]
         let isEnabled = !disabledValues.contains(
             environment["SIM_USE_WDA_CACHE"]?
@@ -294,15 +298,32 @@ public struct WDADeviceCache: Sendable {
                 .lowercased() ?? ""
         )
         return WDADeviceCache(
-            home: home,
+            home: resolvedHome,
             enabled: isEnabled,
             metadataProvider: {
-                try liveHostMetadata(environment: environment, home: home)
+                try liveHostMetadata(environment: environment, home: resolvedHome)
             },
             artifactInspector: {
                 try inspectLiveArtifact($0, environment: environment)
             }
         )
+    }
+
+    static func resolvedStateHome(
+        environment: [String: String],
+        explicitHome: URL?
+    ) -> URL {
+        if let explicitHome {
+            return explicitHome.standardizedFileURL
+        }
+        if let configured = environment["SIM_USE_WDA_STATE_HOME"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !configured.isEmpty
+        {
+            return URL(fileURLWithPath: configured, isDirectory: true)
+                .standardizedFileURL
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
     }
 
     // MARK: - Paths
@@ -855,7 +876,7 @@ public struct WDADeviceCache: Sendable {
         environment: [String: String],
         home: URL
     ) throws -> HostMetadata {
-        let xcode = try run(
+        let xcode = try runProcess(
             executable: "/usr/bin/xcodebuild",
             arguments: ["-version"],
             environment: environment
@@ -946,7 +967,7 @@ public struct WDADeviceCache: Sendable {
         guard FileManager.default.fileExists(atPath: app.path) else {
             throw ArtifactValidationError.missing(app.path)
         }
-        let verification = try run(
+        let verification = try runProcess(
             executable: "/usr/bin/codesign",
             arguments: ["--verify", "--deep", "--strict", app.path],
             environment: environment
@@ -971,7 +992,7 @@ public struct WDADeviceCache: Sendable {
         }
 
         let profileURL = app.appendingPathComponent("embedded.mobileprovision")
-        let profileResult = try run(
+        let profileResult = try runProcess(
             executable: "/usr/bin/security",
             arguments: ["cms", "-D", "-i", profileURL.path],
             environment: environment
@@ -1018,13 +1039,13 @@ public struct WDADeviceCache: Sendable {
         )
     }
 
-    private struct ProcessResult {
+    struct ProcessResult {
         let status: Int32
         let stdout: String
         let stderr: String
     }
 
-    private static func run(
+    static func runProcess(
         executable: String,
         arguments: [String],
         environment: [String: String]
@@ -1037,14 +1058,41 @@ public struct WDADeviceCache: Sendable {
         let stderr = Pipe()
         process.standardOutput = stdout
         process.standardError = stderr
+
+        let lock = NSLock()
+        var stdoutData = Data()
+        var stderrData = Data()
+        stdout.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else { return }
+            lock.lock()
+            stdoutData.append(chunk)
+            lock.unlock()
+        }
+        stderr.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else { return }
+            lock.lock()
+            stderrData.append(chunk)
+            lock.unlock()
+        }
+
         do {
             try process.run()
         } catch {
+            stdout.fileHandleForReading.readabilityHandler = nil
+            stderr.fileHandleForReading.readabilityHandler = nil
             throw ArtifactValidationError.commandFailed(error.localizedDescription)
         }
-        let stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
+
+        stdout.fileHandleForReading.readabilityHandler = nil
+        stderr.fileHandleForReading.readabilityHandler = nil
+        lock.lock()
+        stdoutData.append(stdout.fileHandleForReading.readDataToEndOfFile())
+        stderrData.append(stderr.fileHandleForReading.readDataToEndOfFile())
+        lock.unlock()
+
         return ProcessResult(
             status: process.terminationStatus,
             stdout: String(decoding: stdoutData, as: UTF8.self),

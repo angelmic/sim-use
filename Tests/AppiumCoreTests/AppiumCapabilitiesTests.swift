@@ -64,20 +64,20 @@ final class AppiumCapabilitiesTests: XCTestCase {
         let json = try encodedJSON(AppiumCapabilities(
             platformName: "iOS",
             automationName: "XCUITest",
-            udid: "00008140-00096D5C0CEA801C",
+            udid: "00008110-001234567890001E",
             wdaLocalPort: 8110,
             wdaRemotePort: 8100,
             usePreinstalledWDA: true,
-            updatedWDABundleId: "com.catchplay.WebDriverAgentRunner"
+            updatedWDABundleId: "com.example.WebDriverAgentRunner"
         ))
 
         XCTAssertEqual(json["platformName"] as? String, "iOS")
         XCTAssertEqual(json["appium:automationName"] as? String, "XCUITest")
-        XCTAssertEqual(json["appium:udid"] as? String, "00008140-00096D5C0CEA801C")
+        XCTAssertEqual(json["appium:udid"] as? String, "00008110-001234567890001E")
         XCTAssertEqual(json["appium:wdaLocalPort"] as? Int, 8110)
         XCTAssertEqual(json["appium:wdaRemotePort"] as? Int, 8100)
         XCTAssertEqual(json["appium:usePreinstalledWDA"] as? Bool, true)
-        XCTAssertEqual(json["appium:updatedWDABundleId"] as? String, "com.catchplay.WebDriverAgentRunner")
+        XCTAssertEqual(json["appium:updatedWDABundleId"] as? String, "com.example.WebDriverAgentRunner")
         for absent in [
             "appium:noReset",
             "appium:useNewWDA",
@@ -95,12 +95,12 @@ final class AppiumCapabilitiesTests: XCTestCase {
         let json = try encodedJSON(AppiumCapabilities(
             platformName: "tvOS",
             automationName: "XCUITest",
-            udid: "c311e5afe90ee702b80e8b64e1e12796e04e63a0",
+            udid: "0123456789abcdef0123456789abcdef01234567",
             webDriverAgentUrl: "http://127.0.0.1:8104"
         ))
 
         XCTAssertEqual(json["platformName"] as? String, "tvOS")
-        XCTAssertEqual(json["appium:udid"] as? String, "c311e5afe90ee702b80e8b64e1e12796e04e63a0")
+        XCTAssertEqual(json["appium:udid"] as? String, "0123456789abcdef0123456789abcdef01234567")
         XCTAssertEqual(json["appium:webDriverAgentUrl"] as? String, "http://127.0.0.1:8104")
         for absent in [
             "appium:usePreinstalledWDA",

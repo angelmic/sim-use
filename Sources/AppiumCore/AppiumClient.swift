@@ -161,6 +161,17 @@ public struct AppiumClient: Sendable {
         try validate(response)
     }
 
+    fileprivate func clear(
+        elementID: String,
+        sessionID: String
+    ) async throws {
+        let response = try await send(
+            method: "POST",
+            path: "/session/\(sessionID)/element/\(elementID)/clear"
+        )
+        try validate(response)
+    }
+
     /// W3C `POST /actions` with a single pointer input source. The generic
     /// primitive iOS tap/swipe build on; the step list is the caller's
     /// concern. Coordinates round to integers as the spec requires.
@@ -295,6 +306,11 @@ public struct AppiumSession: Sendable {
 
     public func sendKeys(_ text: String, elementID: String) async throws {
         try await client.sendKeys(text, elementID: elementID, sessionID: id)
+    }
+
+    /// Clear an editable element through the W3C element endpoint.
+    public func clear(elementID: String) async throws {
+        try await client.clear(elementID: elementID, sessionID: id)
     }
 
     /// Dispatch a W3C pointer gesture (tap / swipe / hold) built from

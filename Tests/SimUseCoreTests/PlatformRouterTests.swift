@@ -11,10 +11,10 @@ import Testing
 @Suite("PlatformRouter — Apple physical device routing")
 struct PlatformRouterAppleDeviceTests {
     // Real shapes captured from `idevice_id -l` / `devicectl list devices`:
-    //   dash form  — iPhone 16 Pro Max "CP 16 Pro Max" (ECID-derived UDID)
-    //   classic 40 — Apple TV "辦公桌tv理查" (older 40-hex UDID)
-    private let dashDevice = "00008140-00096D5C0CEA801C"
-    private let classicDevice = "c311e5afe90ee702b80e8b64e1e12796e04e63a0"
+    //   dash form  — iPhone 16 Pro Max "Test iPhone" (ECID-derived UDID)
+    //   classic 40 — Apple TV "Test Apple TV" (older 40-hex UDID)
+    private let dashDevice = "00008110-001234567890001E"
+    private let classicDevice = "0123456789abcdef0123456789abcdef01234567"
     private let simUUID = "8C06D6B2-10CB-468B-BDBE-EC425EF08A34"
     private let androidEmulator = "emulator-5554"
     private let androidSerial = "R58N30ABCDE"
@@ -65,6 +65,19 @@ struct PlatformRouterAppleDeviceTests {
     func resolveRoutesDevices() {
         #expect(PlatformRouter.resolve(udid: dashDevice) == .appleDevice)
         #expect(PlatformRouter.resolve(udid: classicDevice) == .appleDevice)
+    }
+
+    @Test("physical-device UDID matching is case-insensitive")
+    func deviceUDIDCaseVariantsRouteToAppleDevice() {
+        let lowercaseDash = dashDevice.lowercased()
+        let uppercaseClassic = classicDevice.uppercased()
+
+        #expect(PlatformRouter.looksLikeAppleDevice(lowercaseDash))
+        #expect(PlatformRouter.looksLikeAppleDevice(uppercaseClassic))
+        #expect(PlatformRouter.resolve(udid: lowercaseDash) == .appleDevice)
+        #expect(PlatformRouter.resolve(udid: uppercaseClassic) == .appleDevice)
+        #expect(!PlatformRouter.looksLikeAndroid(lowercaseDash))
+        #expect(!PlatformRouter.looksLikeAndroid(uppercaseClassic))
     }
 
     @Test("resolve prefers .appleDevice over the Android fallback (P0 #2)")

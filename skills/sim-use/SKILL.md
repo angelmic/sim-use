@@ -17,7 +17,28 @@ This verifies sim-use is installed, the device is reachable, and its backend tra
 2. `sim-use devices` — confirm the target device is listed and booted/connected.
 3. `sim-use ui --device <UDID>` — confirm you can read the screen.
 
-`--device` is optional when only one simulator is booted or one daemon is running. For Android, run `sim-use android init --device <serial>` once to install the bridge APK. For tvOS, start Appium with the XCUITest driver before preflight (`appium --port 4723`; override with `SIM_USE_APPIUM_URL`) and pass the target app as `sim-use tvos ui --bundle-id <id>` so a cold WDA launch restores it before observation. A modern physical Apple TV also needs a live RemoteXPC tunnel and `SIM_USE_TVOS_WDA_BUNDLE_ID` matching its installed signed runner.
+`--device` is optional when only one simulator is booted or one daemon is running. For Android, run `sim-use android init --device <serial>` once to install the bridge APK. For tvOS, start Appium with the XCUITest driver before preflight (`appium --port 4723`; override with `SIM_USE_APPIUM_URL`) and pass the target app as `sim-use tvos ui --bundle-id <id>` so a cold WDA launch restores it before observation. A modern physical Apple TV needs `SIM_USE_TVOS_WDA_BUNDLE_ID` matching its signed runner. Supplying a live `SIM_USE_TUNNEL_REGISTRY_PORT` enables the retained installed-runner supervisor; without one sim-use uses Appium-managed WDA.
+
+For repository release validation on physical Apple hardware, use
+`make e2e-ios-device` or `make e2e-tvos-device`. These strict targets require
+the target UDID, fixture bundle id, WDA product id, and Apple Team id. Copy
+`.sim-use-e2e.local.env.example` to the gitignored
+`.sim-use-e2e.local.env`; the runners load it only at script runtime. Set
+`SIM_USE_E2E_CONFIG_FILE` for another path, or use non-empty environment
+variables to override individual values. They fail instead of SKIP when
+hardware is absent.
+The runners set `SIM_USE_WDA_STATE_HOME` beneath their evidence directory so
+their signing cache, DerivedData, and supervisor records do not overwrite a
+long-lived xd process's `~/.sim-use/<UDID>` state.
+They prefer CoreDevice/RemoteXPC and use a live `idevice_id -l` attachment only
+as a USB fallback. The tvOS gate defaults to Appium-managed WDA. To exercise
+the retained supervisor, keep `sudo appium driver run xcuitest
+tunnel-creation --appletv-device-id "$SIM_USE_TVOS_DEVICE_UDID"
+--tunnel-registry-port 42314` alive and run the gate with
+`SIM_USE_TUNNEL_REGISTRY_PORT=42314`; an explicit but missing registry fails
+fast. The iOS/tvOS runners use isolated Mac-side WDA ports `8110` / `8111` by
+default while the device side stays on `8100`. See the README's
+*Physical-device E2E gates* section for the exact variables.
 
 ## 1. The observe-act loop
 
@@ -113,13 +134,13 @@ Quick symptom index — see `references/pitfalls.md` for detailed recipes.
 | iOS device: installed WDA signature expired or runner is missing | The signed XCTest runner is no longer launchable | On the first successful setup, set `SIM_USE_WDA_BUNDLE_ID` to the product id and `SIM_USE_XCODE_ORG_ID` to its Apple Developer Team. sim-use persists those repair inputs in `~/.sim-use/<UDID>/wda-signing-config.json`; later runs restore them automatically (non-empty env still wins). It checks `wda-signing-cache.json` before session creation: a valid artifact uses `test-without-building`, while a missing/stale/invalid one sets `useNewWDA=true` and performs one incremental sign/build repair, preventing Appium from attaching to a still-running WDA and falsely leaving the broken local artifact unchanged. |
 | iOS device: tap returns HTTP 200 but the UI does not change | Appium's legacy `mobile: tap` reached WDA `/wda/tap`, which may acknowledge without injecting input | Do not retry that route. sim-use physical-device taps use W3C `POST /actions` (`pointerMove` → `pointerDown` → optional `pause` → `pointerUp`) and reject legacy mobile-tap scripts before transport. Always verify with a fresh `ui` or screenshot; HTTP 200 alone is not interaction success. |
 | tvOS: `Cannot reach Appium` | Appium is not running at `SIM_USE_APPIUM_URL` | Run `appium --port 4723`; ensure `appium driver list --installed` includes XCUITest |
-| tvOS device: repeated first WDA launch is slow or asks for signing approval | Appium fell through to xcodebuild instead of reusing the installed runner through XCTest/testmanagerd | Supply `--bundle-id` (or `SIM_USE_TVOS_BUNDLE_ID`) and the installed product id in `SIM_USE_TVOS_WDA_BUNDLE_ID`. sim-use health-checks and retains a per-UDID supervisor; inspect `~/.sim-use/<UDID>/tvos-wda-supervisor.json`. A live RemoteXPC tunnel is still required. `wda-signing-cache.json` remains the build/sign repair cache when the supervisor is disabled or unavailable |
+| tvOS device: repeated first WDA launch is slow or asks for signing approval | The command is using Appium-managed WDA instead of the retained installed-runner supervisor | Supply `--bundle-id` (or `SIM_USE_TVOS_BUNDLE_ID`) and the installed product id in `SIM_USE_TVOS_WDA_BUNDLE_ID`. For the retained supervisor, also supply a live `SIM_USE_TUNNEL_REGISTRY_PORT`; inspect `~/.sim-use/<UDID>/tvos-wda-supervisor.json`. Without a registry, Appium-managed WDA and `wda-signing-cache.json` are the expected fallback. |
 | tvOS: `ui` unexpectedly shows Home after Appium starts | A cold WDA launch changed the foreground app and no target was supplied | Re-run the namespaced command with `--bundle-id <id>`, or set `SIM_USE_TVOS_BUNDLE_ID` for top-level `ui` / `screenshot` |
 | tvOS: `type` says it needs focus on a text field | Focus sits on a button/cell, not a text field | Run `ui`, move focus onto the `TextField` with `tvos remote`, retry |
 | tvOS: focus does not move | Direction is unavailable from the current focus graph (`remote` already waits 0.35 s for the focus animation) | Re-run `ui` and choose another direction; for slow transitions raise `--settle-delay` |
 | Outline shows `U+FFFC` in label | iOS icon placeholder character | Match with `--label-regex` excluding the prefix |
 | `[i] … covers ~N% of the screen` warning (text output, or `--json` top-level `advisory` key) | The selector resolved to a near-full-screen wrapper (common on Flutter/canvas UIs) and the tap hit its center, likely missing the intended control | Re-run `ui` and target the control via `@N`/`#<id>`, or pass explicit `-x/-y`/`--point` |
-| `[i] Screen orientation could not be confirmed…` / `…coordinates may be stale…` advisory | Device/app is rotated (the `App:` header shows a tag like `(landscape-right)`) and orientation self-calibration couldn't verify the mapping, or the `@N` snapshot predates a rotation | Re-run `ui` and tap again; selectors handle rotation automatically once calibration succeeds. Explicit `-x/-y`/`--point` is device-native portrait space by default — on `swipe`/`touch`, pass `--coordinate-space ui` to use outline (visual-space) coordinates on a rotated device |
+| `[i] Screen orientation could not be confirmed…` / `…coordinates may be stale…` advisory | Simulator/app is rotated (the `App:` header shows a tag like `(landscape-right)`) and orientation self-calibration couldn't verify the mapping, or the `@N` snapshot predates a rotation | Re-run `ui` and tap again; selectors handle rotation automatically once calibration succeeds. On iOS Simulator, explicit `-x/-y`/`--point` is device-native portrait space by default — on `swipe`/`touch`, pass `--coordinate-space ui` to use outline (visual-space) coordinates. Physical iOS WDA already uses display-space coordinates and rejects that Simulator-only override. |
 
 ## 3. Crash awareness
 

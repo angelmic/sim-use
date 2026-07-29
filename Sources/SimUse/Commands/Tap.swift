@@ -163,12 +163,21 @@ struct Tap: SimUseExecutableCommand {
     /// or a live selector) and dispatch a W3C tap through WebDriverAgent.
     /// The controller rejects a tvOS device with `TVOSCapabilityError`.
     private func executeAppleDevice() async throws -> ExecutionResult {
+        guard multiTouch.fingers == 1 else {
+            throw CLIError(
+                errorDescription: "--fingers 2 is not supported on physical Apple devices; use a single-finger tap."
+            )
+        }
         let holdMs = duration.map { Int(($0 * 1000).rounded()) } ?? 0
         let point = try await AppleDeviceController.live().tap(
             udid: device.resolved,
             target: try makeDeviceTapTarget(),
             bundleId: bundleId,
-            holdMs: holdMs
+            holdMs: holdMs,
+            preDelay: timing.preDelay,
+            postDelay: timing.postDelay,
+            waitTimeout: timing.waitTimeout,
+            pollInterval: timing.pollInterval
         )
         return ExecutionResult(x: point.x, y: point.y)
     }

@@ -79,15 +79,16 @@ public enum PlatformRouter {
     }
 
     /// A physical Apple device UDID in the modern ECID-derived form:
-    /// 8 hex, a dash, then 16 hex — e.g. `00008140-00096D5C0CEA801C`
+    /// 8 hex, a dash, then 16 hex — e.g. `00008110-001234567890001E`
     /// (iPhone 15/16/17-generation, as emitted by `idevice_id -l` and
-    /// `devicectl`'s `hardwareProperties.udid`). Uppercase as Apple emits it.
-    static let appleDeviceDashUDIDPattern = "^[0-9A-F]{8}-[0-9A-F]{16}$"
+    /// `devicectl`'s `hardwareProperties.udid`). Match case-insensitively
+    /// because shell variables and third-party tooling can normalize it.
+    static let appleDeviceDashUDIDPattern = "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}$"
 
     /// A physical Apple device UDID in the classic 40-hex form —
-    /// e.g. `c311e5afe90ee702b80e8b64e1e12796e04e63a0` (older iPhone and
-    /// Apple TV). Lowercase, no dashes, exactly 40 characters.
-    static let appleDeviceClassicUDIDPattern = "^[0-9a-f]{40}$"
+    /// e.g. `0123456789abcdef0123456789abcdef01234567` (older iPhone and
+    /// Apple TV). No dashes, exactly 40 characters; accept either case.
+    static let appleDeviceClassicUDIDPattern = "^[0-9A-Fa-f]{40}$"
 
     /// `true` when the UDID looks like a physical Apple device (iOS or tvOS),
     /// in either the modern dash form or the classic 40-hex form. Checked

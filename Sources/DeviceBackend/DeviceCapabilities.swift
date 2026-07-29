@@ -97,10 +97,11 @@ public struct DeviceCapabilityConfig: Sendable, Equatable {
 ///     When signing inputs are configured, `AppleDeviceController` replaces
 ///     it before session creation with the verified per-device prebuilt or
 ///     one-shot incremental build path.
-///   * tvOS 17+/26 — normally attach-only to the XCTest-backed installed
-///     runner owned by `TVOSWDASupervisor`. If that path is disabled or has
-///     no target app, this builder retains the signed xcodebuild repair
-///     path: `xcodeOrgId` + `xcodeSigningId` + `updatedWDABundleId`.
+///   * tvOS 17+/26 — attach-only to the XCTest-backed installed runner when
+///     `TVOSWDASupervisor` has an explicit tunnel registry. With no registry,
+///     a disabled supervisor, or no target app, this builder retains the
+///     signed xcodebuild repair path:
+///     `xcodeOrgId` + `xcodeSigningId` + `updatedWDABundleId`.
 ///   * ≤16.x (either family) — the classic external `webDriverAgentUrl`;
 ///     absent `SIM_USE_WDA_URL` is a fail-fast, not a silent hang.
 public enum DeviceCapabilityBuilder {

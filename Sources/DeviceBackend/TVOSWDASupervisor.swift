@@ -143,9 +143,15 @@ public struct TVOSWDAEndpointProvider: @unchecked Sendable {
 
     public static func live(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        home: URL = FileManager.default.homeDirectoryForCurrentUser
+        home: URL? = nil
     ) -> TVOSWDAEndpointProvider {
-        let supervisor = TVOSWDASupervisor(environment: environment, home: home)
+        let supervisor = TVOSWDASupervisor(
+            environment: environment,
+            home: WDADeviceCache.resolvedStateHome(
+                environment: environment,
+                explicitHome: home
+            )
+        )
         return TVOSWDAEndpointProvider { info, bundleId, config in
             try await supervisor.ensureEndpoint(
                 for: info,
@@ -222,7 +228,11 @@ public struct TVOSWDASupervisor: Sendable {
         targetBundleId: String,
         config: DeviceCapabilityConfig
     ) async throws -> URL? {
-        guard info.family == .tvos, info.isModern, isEnabled else {
+        guard info.family == .tvos,
+              info.isModern,
+              isEnabled,
+              hasTunnelRegistryOverride
+        else {
             return nil
         }
         let plan = try makePlan(
@@ -306,6 +316,19 @@ public struct TVOSWDASupervisor: Sendable {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .lowercased() ?? ""
         )
+    }
+
+    /// The installed-runner supervisor consumes the service catalog owned by
+    /// appium-ios-remotexpc's tunnel registry. Without an explicit registry
+    /// port, return control to TVOSDeviceController's Appium-managed WDA path
+    /// instead of launching a child that can only fail after its startup wait.
+    private var hasTunnelRegistryOverride: Bool {
+        guard let value = environment["SIM_USE_TUNNEL_REGISTRY_PORT"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        else {
+            return false
+        }
+        return !value.isEmpty
     }
 
     private func makePlan(
