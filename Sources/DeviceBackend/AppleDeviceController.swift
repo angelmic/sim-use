@@ -436,6 +436,12 @@ public struct AppleDeviceController: Sendable {
         )
         capabilities.usePreinstalledWDA = nil
         capabilities.usePrebuiltWDA = usePrebuiltWDA ? true : nil
+        // A cache miss means the local runner is missing, expired, or has an
+        // invalid signature. Without useNewWDA, XCUITest may attach to a
+        // still-running WDA at wdaLocalPort and report session success without
+        // ever rebuilding the invalid artifact. Force the repair branch to
+        // quit/uninstall that instance and run xcodebuild once.
+        capabilities.useNewWDA = usePrebuiltWDA ? nil : true
         capabilities.derivedDataPath = plan.derivedDataPath.path
         capabilities.xcodeOrgId = config.xcodeOrgId
         capabilities.xcodeSigningId = config.xcodeSigningId

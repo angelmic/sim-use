@@ -170,13 +170,23 @@ and are never persisted.
 fingerprint, artifact signing time, profile expiry, and last successful
 launch. A valid record goes directly to Appium's `test-without-building`
 path; a missing, stale, or expired record goes directly to one incremental
-build/sign attempt under `~/.sim-use/<UDID>/wda-derived-data`, avoiding a
+build/sign attempt under `~/.sim-use/<UDID>/wda-derived-data`. The repair
+session sets `appium:useNewWDA=true`, forcing XCUITest to stop/uninstall any
+still-running runner before xcodebuild; otherwise Appium could reuse that
+process and leave an invalid local signature untouched. This also avoids a
 doomed 60-second preinstalled-runner timeout. Independent sim-use processes
 serialize this transition through `wda-repair.lock`, so they cannot build the
 same per-device DerivedData concurrently. A legacy `wda-signing-cache.json`
 can seed the new signing config on its first reuse. With
 `SIM_USE_WDA_CACHE=0`, persisted signing inputs are ignored and sim-use
 retains the original installed-WDA behavior.
+
+Physical-iOS taps and swipes use W3C `POST /session/<id>/actions` pointer
+sequences exclusively. sim-use rejects `mobile: tap` and
+`mobile: tapWithNumberOfTaps` before transport because XCUITest maps those
+scripts to WDA's legacy `/wda/tap` route, which can acknowledge a request
+without delivering an input event. Treat an HTTP 200 as transport evidence
+only; verify the resulting screen state after every action.
 
 tvOS support is experimental and uses Appium's XCUITest driver. Start Appium before the first tvOS command (the default endpoint is `http://127.0.0.1:4723`):
 

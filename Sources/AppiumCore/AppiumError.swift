@@ -8,6 +8,7 @@ public enum AppiumError: Error, LocalizedError, HintProviding, Equatable {
     case webdriver(status: Int, message: String)
     case invalidResponse(String)
     case invalidScreenshot
+    case unsupportedGestureScript(String)
 
     public var errorDescription: String? {
         switch self {
@@ -21,6 +22,8 @@ public enum AppiumError: Error, LocalizedError, HintProviding, Equatable {
             return "Appium returned an invalid WebDriver response: \(message)"
         case .invalidScreenshot:
             return "Appium returned screenshot data that was not valid base64."
+        case .unsupportedGestureScript(let script):
+            return "Appium script \(script) is disabled; use W3C pointer actions instead."
         }
     }
 
@@ -31,6 +34,8 @@ public enum AppiumError: Error, LocalizedError, HintProviding, Equatable {
             return "Start Appium with `appium --port \(port)` and ensure the XCUITest driver is installed (`appium driver install xcuitest`)."
         case .webdriver:
             return "Run `appium driver doctor xcuitest`, then retry with the tvOS Simulator booted."
+        case .unsupportedGestureScript:
+            return "Use `AppiumSession.performPointerActions`, which sends W3C `POST /actions`; `mobile: tap` routes to WDA `/wda/tap` and can acknowledge the request without injecting input."
         case .invalidEndpoint, .invalidResponse, .invalidScreenshot:
             return nil
         }

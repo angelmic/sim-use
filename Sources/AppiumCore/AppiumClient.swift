@@ -88,13 +88,18 @@ public struct AppiumClient: Sendable {
     }
 
     /// Generic `execute/sync`: the pure-protocol primitive backends build
-    /// their platform verbs on (e.g. tvOS `mobile: pressButton`). The script
-    /// name and argument shape are the caller's concern.
+    /// their platform verbs on (e.g. tvOS `mobile: pressButton`). Coordinate
+    /// tap scripts are deliberately rejected: XCUITest maps them to WDA's
+    /// legacy `/wda/tap` route, which can return success without delivering
+    /// an input event. Call `performActions` for every touch gesture.
     fileprivate func execute(
         script: String,
         args: [[String: String]],
         sessionID: String
     ) async throws {
+        if script == "mobile: tap" || script == "mobile: tapWithNumberOfTaps" {
+            throw AppiumError.unsupportedGestureScript(script)
+        }
         let response = try await send(
             method: "POST",
             path: "/session/\(sessionID)/execute/sync",

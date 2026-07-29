@@ -76,6 +76,33 @@ final class AppiumClientTests: XCTestCase {
         XCTAssertEqual(body.args, [["name": "menu"]])
     }
 
+    func testLegacyMobileTapScriptsAreRejectedBeforeTransport() async throws {
+        for script in ["mobile: tap", "mobile: tapWithNumberOfTaps"] {
+            let transport = MockTransport(responses: [
+                sessionResponse(id: "s"),
+                emptyOK(), // session cleanup after the expected rejection
+                emptyOK(), // would be consumed only if execute/sync leaked
+            ])
+            let client = AppiumClient(baseURL: url("http://127.0.0.1:4723"), transport: transport)
+
+            do {
+                try await client.withSession(capabilities: caps) { session in
+                    try await session.execute(script: script)
+                }
+                XCTFail("Expected \(script) to be rejected")
+            } catch {
+                XCTAssertTrue(error.localizedDescription.contains("W3C pointer actions"))
+                XCTAssertTrue((error as? HintProviding)?.hint?.contains("/actions") == true)
+            }
+
+            let requests = await transport.recordedRequests()
+            XCTAssertEqual(requests.map(\.method), ["POST", "DELETE"])
+            XCTAssertEqual(requests.map { $0.url.path }, [
+                "/session", "/session/s",
+            ])
+        }
+    }
+
     func testTrailingSlashBaseURLStillBuildsCleanPaths() async throws {
         let transport = MockTransport(responses: [
             sessionResponse(id: "s7"),

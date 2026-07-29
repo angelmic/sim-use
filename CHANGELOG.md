@@ -63,11 +63,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Physical-iOS touch commands now fail fast if an internal caller tries
+  Appium's legacy `mobile: tap` scripts. Those scripts proxy to WDA
+  `/wda/tap`, which can return success without injecting input; all taps and
+  swipes must use W3C `POST /actions` pointer sequences instead.
 - Modern physical iPhones now recover automatically from a missing, expired,
   or otherwise unlaunchable WDA. With signing inputs configured, the controller
   uses the verified per-UDID prebuilt artifact immediately, or performs one
   incremental build/sign repair when the cache is absent or stale, instead of
-  first waiting for a doomed preinstalled-runner launch timeout.
+  first waiting for a doomed preinstalled-runner launch timeout. Repair forces
+  a fresh WDA lifecycle so Appium cannot report success by attaching to a
+  still-running runner while leaving an invalid local signature unrepaired.
 - Apple Simulator platform routing reads CoreSimulator's per-device `device.plist` (~1 ms) instead of forking `simctl list devices -j` (hundreds of ms) in every CLI invocation — `ui`, `screenshot`, and `record-video` lose a per-call fork, and long-lived daemons now see simulators created after they spawned. The simctl catalog remains as a safety net for unreadable plists (devices in a custom `--set` are visible to neither source and keep the historical iOS routing), and a fallback failure prints a warning instead of silently routing tvOS devices to the iOS backend.
 - Touch/typing/recording verbs aimed at a tvOS Simulator fail in-process with the focus-navigation hint instead of first auto-spawning a per-UDID daemon that can never serve them.
 - A failed Appium session DELETE no longer fails a tvOS command whose work had already completed; teardown is best-effort with a stderr warning.

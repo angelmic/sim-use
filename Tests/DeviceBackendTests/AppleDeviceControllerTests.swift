@@ -347,7 +347,7 @@ final class AppleDeviceControllerTests: XCTestCase {
         )
     }
 
-    func testMissingIOSCacheBuildsThroughPerDeviceCacheWithoutWaitingForPreinstalledTimeout() async throws {
+    func testIOSCacheMissForcesFreshIncrementalBuildInsteadOfReusingRunningWDA() async throws {
         let (cache, plan) = makeIOSCache()
         // Model the artifact Appium's repair build leaves in the stable
         // per-device DerivedData directory, so the successful session can
@@ -374,6 +374,11 @@ final class AppleDeviceControllerTests: XCTestCase {
         let repair = try decodeSessionCaps(sessionRequests[0])
         XCTAssertNil(repair.capabilities.alwaysMatch.usePreinstalledWDA)
         XCTAssertNil(repair.capabilities.alwaysMatch.usePrebuiltWDA)
+        XCTAssertEqual(
+            repair.capabilities.alwaysMatch.useNewWDA,
+            true,
+            "a cache miss must not reuse a still-running WDA with a stale local signature"
+        )
         XCTAssertEqual(repair.capabilities.alwaysMatch.derivedDataPath, plan.derivedDataPath.path)
         XCTAssertEqual(repair.capabilities.alwaysMatch.xcodeOrgId, "MKK9DM2XD9")
         XCTAssertEqual(repair.capabilities.alwaysMatch.xcodeSigningId, "Apple Development")
@@ -411,6 +416,7 @@ final class AppleDeviceControllerTests: XCTestCase {
         let repair = try decodeSessionCaps(try XCTUnwrap(sessionRequests.first))
         XCTAssertNil(repair.capabilities.alwaysMatch.usePreinstalledWDA)
         XCTAssertNil(repair.capabilities.alwaysMatch.usePrebuiltWDA)
+        XCTAssertEqual(repair.capabilities.alwaysMatch.useNewWDA, true)
         XCTAssertEqual(
             repair.capabilities.alwaysMatch.derivedDataPath,
             cache.derivedDataPath(for: iPhoneUDID).path
@@ -457,6 +463,7 @@ final class AppleDeviceControllerTests: XCTestCase {
         XCTAssertEqual(sessionRequests.count, 1)
         let cached = try decodeSessionCaps(sessionRequests[0])
         XCTAssertEqual(cached.capabilities.alwaysMatch.usePrebuiltWDA, true)
+        XCTAssertNil(cached.capabilities.alwaysMatch.useNewWDA)
         XCTAssertNil(cached.capabilities.alwaysMatch.usePreinstalledWDA)
         XCTAssertEqual(cached.capabilities.alwaysMatch.derivedDataPath, plan.derivedDataPath.path)
     }
@@ -486,7 +493,9 @@ final class AppleDeviceControllerTests: XCTestCase {
         let prebuilt = try decodeSessionCaps(sessionRequests[0])
         let rebuild = try decodeSessionCaps(sessionRequests[1])
         XCTAssertEqual(prebuilt.capabilities.alwaysMatch.usePrebuiltWDA, true)
+        XCTAssertNil(prebuilt.capabilities.alwaysMatch.useNewWDA)
         XCTAssertNil(rebuild.capabilities.alwaysMatch.usePrebuiltWDA)
+        XCTAssertEqual(rebuild.capabilities.alwaysMatch.useNewWDA, true)
         XCTAssertNil(rebuild.capabilities.alwaysMatch.usePreinstalledWDA)
         XCTAssertEqual(rebuild.capabilities.alwaysMatch.derivedDataPath, plan.derivedDataPath.path)
         XCTAssertNoThrow(try cache.readRecord(for: iPhoneUDID))
@@ -693,6 +702,7 @@ final class AppleDeviceControllerTests: XCTestCase {
             struct AlwaysMatch: Decodable {
                 let usePreinstalledWDA: Bool?
                 let usePrebuiltWDA: Bool?
+                let useNewWDA: Bool?
                 let derivedDataPath: String?
                 let xcodeOrgId: String?
                 let xcodeSigningId: String?
@@ -700,6 +710,7 @@ final class AppleDeviceControllerTests: XCTestCase {
                 enum CodingKeys: String, CodingKey {
                     case usePreinstalledWDA = "appium:usePreinstalledWDA"
                     case usePrebuiltWDA = "appium:usePrebuiltWDA"
+                    case useNewWDA = "appium:useNewWDA"
                     case derivedDataPath = "appium:derivedDataPath"
                     case xcodeOrgId = "appium:xcodeOrgId"
                     case xcodeSigningId = "appium:xcodeSigningId"
