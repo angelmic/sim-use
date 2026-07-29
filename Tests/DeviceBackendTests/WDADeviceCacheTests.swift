@@ -58,6 +58,216 @@ final class WDADeviceCacheTests: XCTestCase {
         ))
     }
 
+    func testSuccessfulIOSLaunchPersistsSigningInputsForEnvironmentlessRerun() throws {
+        let home = makeHome()
+        let cache = makeIOSCache(home: home)
+        let plan = cache.plan(for: iosInfo(), config: iosConfig())
+        try FileManager.default.createDirectory(
+            at: plan.runnerAppPath,
+            withIntermediateDirectories: true
+        )
+
+        _ = try XCTUnwrap(cache.recordSuccessfulLaunch(plan))
+        _ = try XCTUnwrap(cache.recordSigningConfiguration(
+            for: iosInfo(),
+            config: iosConfig()
+        ))
+        let resolved = cache.resolvedConfig(for: iosInfo(), environment: [:])
+
+        XCTAssertEqual(resolved.iosWDABundleId, "com.catchplay.WebDriverAgentRunner")
+        XCTAssertEqual(resolved.xcodeOrgId, "MKK9DM2XD9")
+        XCTAssertEqual(resolved.xcodeSigningId, "Apple Development")
+        let configFile = cache.signingConfigFile(for: iosInfo().udid)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: configFile.path))
+        let permissions = try FileManager.default.attributesOfItem(atPath: configFile.path)[.posixPermissions] as? NSNumber
+        XCTAssertEqual(permissions?.intValue, 0o600)
+    }
+
+    func testEnvironmentOverridesPersistedSigningInputs() throws {
+        let home = makeHome()
+        let cache = makeIOSCache(home: home)
+        let plan = cache.plan(for: iosInfo(), config: iosConfig())
+        try FileManager.default.createDirectory(
+            at: plan.runnerAppPath,
+            withIntermediateDirectories: true
+        )
+        _ = try XCTUnwrap(cache.recordSuccessfulLaunch(plan))
+        _ = try XCTUnwrap(cache.recordSigningConfiguration(
+            for: iosInfo(),
+            config: iosConfig()
+        ))
+
+        let resolved = cache.resolvedConfig(
+            for: iosInfo(),
+            environment: [
+                "SIM_USE_WDA_BUNDLE_ID": "com.example.OverrideRunner",
+                "SIM_USE_XCODE_ORG_ID": "OVERRIDE123",
+                "SIM_USE_XCODE_SIGNING_ID": "Override Identity",
+                "SIM_USE_WDA_LOCAL_PORT": "8112",
+            ]
+        )
+
+        XCTAssertEqual(resolved.iosWDABundleId, "com.example.OverrideRunner")
+        XCTAssertEqual(resolved.xcodeOrgId, "OVERRIDE123")
+        XCTAssertEqual(resolved.xcodeSigningId, "Override Identity")
+        XCTAssertEqual(resolved.wdaLocalPort, 8112)
+    }
+
+    func testInvalidatingTrustRecordPreservesPersistedSigningInputs() throws {
+        let home = makeHome()
+        let cache = makeIOSCache(home: home)
+        let plan = cache.plan(for: iosInfo(), config: iosConfig())
+        try FileManager.default.createDirectory(
+            at: plan.runnerAppPath,
+            withIntermediateDirectories: true
+        )
+        _ = try XCTUnwrap(cache.recordSuccessfulLaunch(plan))
+        _ = try XCTUnwrap(cache.recordSigningConfiguration(
+            for: iosInfo(),
+            config: iosConfig()
+        ))
+
+        try cache.invalidate(udid: iosInfo().udid)
+        let resolved = cache.resolvedConfig(for: iosInfo(), environment: [:])
+
+        XCTAssertEqual(resolved.iosWDABundleId, "com.catchplay.WebDriverAgentRunner")
+        XCTAssertEqual(resolved.xcodeOrgId, "MKK9DM2XD9")
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: cache.signingConfigFile(for: iosInfo().udid).path
+        ))
+    }
+
+    func testInvalidatingLegacyTrustRecordMaterializesSigningConfig() throws {
+        let home = makeHome()
+        let cache = makeIOSCache(home: home)
+        let plan = cache.plan(for: iosInfo(), config: iosConfig())
+        try FileManager.default.createDirectory(
+            at: plan.runnerAppPath,
+            withIntermediateDirectories: true
+        )
+        _ = try XCTUnwrap(cache.recordSuccessfulLaunch(plan))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: cache.signingConfigFile(for: iosInfo().udid).path
+        ))
+        try JSONEncoder().encode(WDADeviceCache.SigningConfiguration(
+            deviceUDID: iosInfo().udid,
+            platformName: "iOS",
+            wdaBundleIdentifier: "",
+            developmentTeam: "",
+            signingIdentity: "",
+            savedAt: "2026-07-29T00:00:00Z"
+        )).write(to: cache.signingConfigFile(for: iosInfo().udid))
+
+        try cache.invalidate(udid: iosInfo().udid)
+        let resolved = cache.resolvedConfig(for: iosInfo(), environment: [:])
+
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: cache.recordFile(for: iosInfo().udid).path
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: cache.signingConfigFile(for: iosInfo().udid).path
+        ))
+        XCTAssertEqual(resolved.iosWDABundleId, "com.catchplay.WebDriverAgentRunner")
+        XCTAssertEqual(resolved.xcodeOrgId, "MKK9DM2XD9")
+        XCTAssertEqual(resolved.xcodeSigningId, "Apple Development")
+    }
+
+    func testLegacySigningCacheHydratesConfigWhenDedicatedFileIsMissing() throws {
+        let home = makeHome()
+        let cache = makeIOSCache(home: home)
+        let plan = cache.plan(for: iosInfo(), config: iosConfig())
+        try FileManager.default.createDirectory(
+            at: plan.runnerAppPath,
+            withIntermediateDirectories: true
+        )
+        _ = try XCTUnwrap(cache.recordSuccessfulLaunch(plan))
+
+        let resolved = cache.resolvedConfig(for: iosInfo(), environment: [:])
+
+        XCTAssertEqual(resolved.iosWDABundleId, "com.catchplay.WebDriverAgentRunner")
+        XCTAssertEqual(resolved.xcodeOrgId, "MKK9DM2XD9")
+        XCTAssertEqual(resolved.xcodeSigningId, "Apple Development")
+    }
+
+    func testCorruptDedicatedConfigFallsBackToLegacySigningCache() throws {
+        let home = makeHome()
+        let cache = makeIOSCache(home: home)
+        let plan = cache.plan(for: iosInfo(), config: iosConfig())
+        try FileManager.default.createDirectory(
+            at: plan.runnerAppPath,
+            withIntermediateDirectories: true
+        )
+        _ = try XCTUnwrap(cache.recordSuccessfulLaunch(plan))
+        try Data("not-json".utf8).write(
+            to: cache.signingConfigFile(for: iosInfo().udid)
+        )
+
+        let resolved = cache.resolvedConfig(for: iosInfo(), environment: [:])
+
+        XCTAssertEqual(resolved.iosWDABundleId, "com.catchplay.WebDriverAgentRunner")
+        XCTAssertEqual(resolved.xcodeOrgId, "MKK9DM2XD9")
+    }
+
+    func testSigningConfigRejectsWrongUDIDAndPlatform() throws {
+        let home = makeHome()
+        let cache = makeIOSCache(home: home)
+        let target = cache.signingConfigFile(for: iosInfo().udid)
+        try FileManager.default.createDirectory(
+            at: target.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        let wrongUDID = WDADeviceCache.SigningConfiguration(
+            deviceUDID: "00000000-0000000000000000",
+            platformName: "iOS",
+            wdaBundleIdentifier: "com.example.Wrong",
+            developmentTeam: "WRONGTEAM1",
+            signingIdentity: "Wrong Identity",
+            savedAt: "2026-07-29T00:00:00Z"
+        )
+        try JSONEncoder().encode(wrongUDID).write(to: target)
+        var resolved = cache.resolvedConfig(for: iosInfo(), environment: [:])
+        XCTAssertEqual(resolved.iosWDABundleId, "com.facebook.WebDriverAgentRunner")
+        XCTAssertNil(resolved.xcodeOrgId)
+
+        let wrongPlatform = WDADeviceCache.SigningConfiguration(
+            deviceUDID: iosInfo().udid,
+            platformName: "tvOS",
+            wdaBundleIdentifier: "com.example.Wrong",
+            developmentTeam: "WRONGTEAM1",
+            signingIdentity: "Wrong Identity",
+            savedAt: "2026-07-29T00:00:00Z"
+        )
+        try JSONEncoder().encode(wrongPlatform).write(to: target)
+        resolved = cache.resolvedConfig(for: iosInfo(), environment: [:])
+        XCTAssertEqual(resolved.iosWDABundleId, "com.facebook.WebDriverAgentRunner")
+        XCTAssertNil(resolved.xcodeOrgId)
+    }
+
+    func testDisabledCacheIgnoresPersistedSigningConfig() throws {
+        let home = makeHome()
+        let enabled = makeIOSCache(home: home)
+        _ = try XCTUnwrap(enabled.recordSigningConfiguration(
+            for: iosInfo(),
+            config: iosConfig()
+        ))
+        let disabled = WDADeviceCache(
+            home: home,
+            enabled: false,
+            metadataProvider: {
+                .init(xcodeBuild: "unused", wdaSourceSHA256: "unused")
+            },
+            artifactInspector: {
+                throw WDADeviceCache.ArtifactValidationError.missing($0.path)
+            }
+        )
+
+        let resolved = disabled.resolvedConfig(for: iosInfo(), environment: [:])
+
+        XCTAssertEqual(resolved.iosWDABundleId, "com.facebook.WebDriverAgentRunner")
+        XCTAssertNil(resolved.xcodeOrgId)
+    }
+
     func testFreshTimestampCannotHideFingerprintChange() throws {
         let home = makeHome()
         let original = makeCache(home: home)
@@ -299,6 +509,17 @@ final class WDADeviceCacheTests: XCTestCase {
             xcodeOrgId: "MKK9DM2XD9",
             xcodeSigningId: "Apple Development"
         )
+    }
+
+    private func makeIOSCache(home: URL) -> WDADeviceCache {
+        makeCache(home: home, artifactInspector: { [signedAt, now] _ in
+            WDADeviceCache.Artifact(
+                bundleIdentifier: "com.catchplay.WebDriverAgentRunner.xctrunner",
+                teamIdentifier: "MKK9DM2XD9",
+                signedAt: signedAt,
+                provisioningExpiresAt: now.addingTimeInterval(86_400)
+            )
+        })
     }
 
     private func makeCache(

@@ -34,6 +34,7 @@ final class AppleDeviceControllerTests: XCTestCase {
         device: Device,
         config: DeviceCapabilityConfig = DeviceCapabilityConfig(),
         wdaCache: WDADeviceCache = .disabled(),
+        configResolver: AppleDeviceController.ConfigResolver? = nil,
         activationSettler: @escaping @Sendable () async throws -> Void = {}
     ) -> (AppleDeviceController, MockTransport) {
         let transport = MockTransport(responses: responses)
@@ -50,6 +51,7 @@ final class AppleDeviceControllerTests: XCTestCase {
             config: config,
             cacheHome: home,
             wdaCache: wdaCache,
+            configResolver: configResolver,
             activationSettler: activationSettler
         )
         return (controller, transport)
@@ -252,6 +254,99 @@ final class AppleDeviceControllerTests: XCTestCase {
 
     // MARK: - Per-device WDA signing/build recovery
 
+    func testControllerResolvesSigningConfigAfterPreflightIdentifiesUDID() async throws {
+        let (cache, plan) = makeIOSCache()
+        try FileManager.default.createDirectory(
+            at: plan.runnerAppPath,
+            withIntermediateDirectories: true
+        )
+        let (controller, transport) = makeController(
+            [statusOK(), sessionResponse(), valueResponse(source), emptyOK()],
+            device: iPhone(),
+            config: DeviceCapabilityConfig(),
+            wdaCache: cache,
+            configResolver: { [iPhoneUDID] info in
+                XCTAssertEqual(info.udid, iPhoneUDID)
+                return DeviceCapabilityConfig(
+                    iosWDABundleId: "com.catchplay.WebDriverAgentRunner",
+                    xcodeOrgId: "MKK9DM2XD9",
+                    xcodeSigningId: "Apple Development"
+                )
+            }
+        )
+
+        _ = try await controller.describeUI(udid: iPhoneUDID, includeRaw: false)
+
+        let requests = await transport.recordedRequests()
+        let session = try decodeSessionCaps(try XCTUnwrap(
+            requests.first { $0.method == "POST" && $0.url.path == "/session" }
+        ))
+        XCTAssertEqual(session.capabilities.alwaysMatch.derivedDataPath, plan.derivedDataPath.path)
+        XCTAssertEqual(session.capabilities.alwaysMatch.xcodeOrgId, "MKK9DM2XD9")
+        XCTAssertEqual(
+            session.capabilities.alwaysMatch.updatedWDABundleId,
+            "com.catchplay.WebDriverAgentRunner"
+        )
+    }
+
+    func testControllerRefreshesSigningConfigAfterTakingRepairLock() async throws {
+        let (cache, _) = makeIOSCache()
+        let sequence = SynchronousConfigSequence([
+            DeviceCapabilityConfig(
+                iosWDABundleId: "com.example.StaleRunner",
+                xcodeOrgId: "STALETEAM1",
+                xcodeSigningId: "Stale Identity"
+            ),
+            iosSigningConfig(),
+        ])
+        let refreshedPlan = cache.plan(for: PhysicalDeviceInfo(
+            udid: iPhoneUDID,
+            family: .ios,
+            osMajorVersion: 18,
+            tunnelState: "connected",
+            osVersion: "18.7.8"
+        ), config: iosSigningConfig())
+        try FileManager.default.createDirectory(
+            at: refreshedPlan.runnerAppPath,
+            withIntermediateDirectories: true
+        )
+        let (controller, transport) = makeController(
+            [statusOK(), sessionResponse(), valueResponse(source), emptyOK()],
+            device: iPhone(),
+            config: DeviceCapabilityConfig(),
+            wdaCache: cache,
+            configResolver: { _ in sequence.next() }
+        )
+
+        _ = try await controller.describeUI(udid: iPhoneUDID, includeRaw: false)
+
+        let requests = await transport.recordedRequests()
+        let session = try decodeSessionCaps(try XCTUnwrap(
+            requests.first { $0.method == "POST" && $0.url.path == "/session" }
+        ))
+        XCTAssertEqual(session.capabilities.alwaysMatch.xcodeOrgId, "MKK9DM2XD9")
+        XCTAssertEqual(
+            session.capabilities.alwaysMatch.updatedWDABundleId,
+            "com.catchplay.WebDriverAgentRunner"
+        )
+        XCTAssertEqual(sequence.callCount, 2)
+        let persisted = cache.resolvedConfig(
+            for: PhysicalDeviceInfo(
+                udid: iPhoneUDID,
+                family: .ios,
+                osMajorVersion: 18,
+                tunnelState: "connected",
+                osVersion: "18.7.8"
+            ),
+            environment: [:]
+        )
+        XCTAssertEqual(persisted.xcodeOrgId, "MKK9DM2XD9")
+        XCTAssertEqual(
+            persisted.iosWDABundleId,
+            "com.catchplay.WebDriverAgentRunner"
+        )
+    }
+
     func testMissingIOSCacheBuildsThroughPerDeviceCacheWithoutWaitingForPreinstalledTimeout() async throws {
         let (cache, plan) = makeIOSCache()
         // Model the artifact Appium's repair build leaves in the stable
@@ -321,6 +416,22 @@ final class AppleDeviceControllerTests: XCTestCase {
             cache.derivedDataPath(for: iPhoneUDID).path
         )
         XCTAssertEqual(repair.capabilities.alwaysMatch.xcodeOrgId, "MKK9DM2XD9")
+        let nextRun = cache.resolvedConfig(
+            for: PhysicalDeviceInfo(
+                udid: iPhoneUDID,
+                family: .ios,
+                osMajorVersion: 18,
+                tunnelState: "connected",
+                osVersion: "18.7.8"
+            ),
+            environment: [:]
+        )
+        XCTAssertEqual(nextRun.iosWDABundleId, "com.catchplay.WebDriverAgentRunner")
+        XCTAssertEqual(
+            nextRun.xcodeOrgId,
+            "MKK9DM2XD9",
+            "a successful repair must persist signing inputs even when host fingerprint metadata is unavailable"
+        )
     }
 
     func testValidIOSSigningCacheUsesPrebuiltArtifactWithoutWaitingForPreinstalledTimeout() async throws {
@@ -379,6 +490,52 @@ final class AppleDeviceControllerTests: XCTestCase {
         XCTAssertNil(rebuild.capabilities.alwaysMatch.usePreinstalledWDA)
         XCTAssertEqual(rebuild.capabilities.alwaysMatch.derivedDataPath, plan.derivedDataPath.path)
         XCTAssertNoThrow(try cache.readRecord(for: iPhoneUDID))
+    }
+
+    func testRejectedLegacyPrebuiltKeepsSigningInputsWhenRepairFails() async {
+        let (cache, plan) = makeIOSCache()
+        try? FileManager.default.createDirectory(
+            at: plan.runnerAppPath,
+            withIntermediateDirectories: true
+        )
+        _ = try? cache.recordSuccessfulLaunch(plan)
+        let (controller, _) = makeController(
+            [
+                statusOK(),
+                webdriverError("test-without-building rejected prebuilt WDA"),
+                webdriverError("xcodebuild repair failed"),
+            ],
+            device: iPhone(),
+            config: iosSigningConfig(),
+            wdaCache: cache
+        )
+
+        do {
+            _ = try await controller.describeUI(
+                udid: iPhoneUDID,
+                includeRaw: false
+            )
+            XCTFail("expected the one repair attempt to fail")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("xcodebuild repair failed"))
+        }
+
+        let info = PhysicalDeviceInfo(
+            udid: iPhoneUDID,
+            family: .ios,
+            osMajorVersion: 18,
+            tunnelState: "connected",
+            osVersion: "18.7.8"
+        )
+        let persisted = cache.resolvedConfig(for: info, environment: [:])
+        XCTAssertEqual(persisted.iosWDABundleId, "com.catchplay.WebDriverAgentRunner")
+        XCTAssertEqual(persisted.xcodeOrgId, "MKK9DM2XD9")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: cache.recordFile(for: iPhoneUDID).path
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: cache.signingConfigFile(for: iPhoneUDID).path
+        ))
     }
 
     func testIOSWithoutSigningConfigKeepsPreinstalledFastPathWithoutMetadataInspection() async throws {
@@ -583,5 +740,31 @@ private final class SynchronousCountProbe: @unchecked Sendable {
         lock.lock()
         count += 1
         lock.unlock()
+    }
+}
+
+private final class SynchronousConfigSequence: @unchecked Sendable {
+    private let lock = NSLock()
+    private let configs: [DeviceCapabilityConfig]
+    private var index = 0
+
+    init(_ configs: [DeviceCapabilityConfig]) {
+        precondition(!configs.isEmpty)
+        self.configs = configs
+    }
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return index
+    }
+
+    func next() -> DeviceCapabilityConfig {
+        lock.lock()
+        defer {
+            index += 1
+            lock.unlock()
+        }
+        return configs[min(index, configs.count - 1)]
     }
 }

@@ -147,10 +147,9 @@ sim-use drives **iOS Simulators**, **tvOS Simulators**, and **Android devices / 
 
 For Android, run `sim-use android init --device <serial>` once to install the bridge APK. See `AGENTS.md` for Android toolchain setup.
 
-Physical iPhones on iOS 17 or newer can keep a verified signed WDA artifact
-per device. To enable the cache and one-shot automatic repair when that
-runner's signature expires or it becomes unlaunchable, provide the signing
-inputs used for that runner:
+Physical iPhones on iOS 17 or newer keep a verified signed WDA artifact and
+its repair inputs per device. Provide the signing inputs on the first
+successful WDA-backed command (or whenever you intentionally change them):
 
 ```bash
 export SIM_USE_WDA_BUNDLE_ID=com.example.WebDriverAgentRunner
@@ -159,6 +158,14 @@ export SIM_USE_XCODE_ORG_ID=ABCDE12345
 export SIM_USE_XCODE_SIGNING_ID="Apple Development"
 ```
 
+After Appium creates the session, sim-use stores the three signing inputs in
+`~/.sim-use/<UDID>/wda-signing-config.json` with mode `0600`. Later commands
+restore them automatically, so routine cold/warm launches no longer need
+those exports. Non-empty environment values always override the persisted
+record and replace it after the next successful session. Appium URLs, WDA
+proxy ports, WDA source roots, and `SIM_USE_WDA_CACHE` remain process-scoped
+and are never persisted.
+
 `wda-signing-cache.json` records the exact device/Xcode/WDA/signing
 fingerprint, artifact signing time, profile expiry, and last successful
 launch. A valid record goes directly to Appium's `test-without-building`
@@ -166,8 +173,10 @@ path; a missing, stale, or expired record goes directly to one incremental
 build/sign attempt under `~/.sim-use/<UDID>/wda-derived-data`, avoiding a
 doomed 60-second preinstalled-runner timeout. Independent sim-use processes
 serialize this transition through `wda-repair.lock`, so they cannot build the
-same per-device DerivedData concurrently. Without signing inputs (or with
-`SIM_USE_WDA_CACHE=0`), sim-use retains the original installed-WDA behavior.
+same per-device DerivedData concurrently. A legacy `wda-signing-cache.json`
+can seed the new signing config on its first reuse. With
+`SIM_USE_WDA_CACHE=0`, persisted signing inputs are ignored and sim-use
+retains the original installed-WDA behavior.
 
 tvOS support is experimental and uses Appium's XCUITest driver. Start Appium before the first tvOS command (the default endpoint is `http://127.0.0.1:4723`):
 

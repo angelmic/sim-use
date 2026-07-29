@@ -34,19 +34,16 @@
 #     PATH; the runner starts a task-owned server on SIM_USE_APPIUM_PORT
 #     (default 4792) and tears it down on exit. Set SIM_USE_APPIUM_URL to
 #     reuse an already-running server instead.
-#   * A signed, launch-and-serve WebDriverAgent installed on the device, whose
-#     bundle id matches SIM_USE_WDA_BUNDLE_ID (below). Appium's usePreinstalledWDA
-#     launches it (no manual launch); on iOS 17+ it reaches the on-device WDA
-#     through appium-ios-device when the RemoteXPC tunnel registry is absent, so
-#     no root tunnel daemon is required as long as the installed WDA serves on
-#     launch. A WDA that only serves under a full XCTest host will dead-end in a
-#     60 s "Failed to start the preinstalled WebDriverAgent" — reinstall a
-#     known-good signed WDA .ipa if that happens.
+#   * WDA signing inputs that match the target device. On a cache hit the CLI
+#     selects Appium's test-without-building path; on a miss it performs one
+#     incremental build/sign in the stable per-UDID DerivedData directory.
+#     The first successful session writes wda-signing-config.json, so later
+#     daily commands do not need the signing variables exported again.
 #   * Post the app-agnostic caps default (DeviceCapabilityConfig.iosWDABundleId
 #     ships as the upstream com.facebook.WebDriverAgentRunner), a CatchPlay
 #     device needs the WDA bundle id pinned — the runner exports
 #     SIM_USE_WDA_BUNDLE_ID (default com.catchplay.WebDriverAgentRunner) so the
-#     CLI targets the WDA that is actually installed. Override to re-point.
+#     CLI signs/targets the intended WDA product. Override to re-point.
 #
 # Usage:
 #   scripts/test-runner-ios-device.sh            # build fixture + run all cases
@@ -78,6 +75,7 @@ cd "$REPO_ROOT"
 UDID="${SIM_USE_DEVICE_UDID:-00008140-00096D5C0CEA801C}"   # CP 16 Pro Max
 BUNDLE_ID="${SIM_USE_PLAYGROUND_BUNDLE_ID:-com.catchplay.SimUsePlayground}"
 DEV_TEAM="${SIM_USE_XCODE_ORG_ID:-MKK9DM2XD9}"
+export SIM_USE_XCODE_ORG_ID="$DEV_TEAM"
 APPIUM_PORT="${SIM_USE_APPIUM_PORT:-4792}"
 PLAYGROUND_DIR="Playgrounds/iOS"
 PLAYGROUND_PROJECT="$PLAYGROUND_DIR/SimUsePlayground.xcodeproj"

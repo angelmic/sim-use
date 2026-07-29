@@ -3,12 +3,13 @@ import Foundation
 import AppiumCore
 import SimUseCore
 
-/// Tunables for physical-device capability assembly, all overridable by
-/// environment so a differently-signed WebDriverAgent or a non-default
-/// port needs no rebuild. Defaults are app/team-agnostic (D7: the CLI never
-/// bakes in a value specific to one app or developer account) — the WDA
-/// bundle ids follow the upstream WebDriverAgent naming convention, and the
-/// Team id has no universal default (see `xcodeOrgId`).
+/// Tunables for physical-device capability assembly. Process environment
+/// values always win; iOS signing inputs can also be restored from a
+/// per-UDID record after one successful WDA-backed session. Defaults remain
+/// app/team-agnostic (D7: the CLI never bakes in a value specific to one app
+/// or developer account) — the WDA bundle ids follow the upstream
+/// WebDriverAgent naming convention, and the Team id has no universal
+/// default (see `xcodeOrgId`).
 public struct DeviceCapabilityConfig: Sendable, Equatable {
     /// iOS preinstalled WDA product id, **without** the `.xctrunner`
     /// suffix — the XCUITest driver appends it when launching. Override for
@@ -69,7 +70,14 @@ public struct DeviceCapabilityConfig: Sendable, Equatable {
     public static func live(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> DeviceCapabilityConfig {
-        var config = DeviceCapabilityConfig()
+        DeviceCapabilityConfig().applying(environment: environment)
+    }
+
+    /// Apply process-scoped overrides last. Persistent per-device signing
+    /// inputs use this same merge point so precedence stays deterministic:
+    /// environment > per-device record > generic defaults.
+    public func applying(environment: [String: String]) -> DeviceCapabilityConfig {
+        var config = self
         if let value = environment["SIM_USE_WDA_BUNDLE_ID"]?.nonBlank { config.iosWDABundleId = value }
         if let value = environment["SIM_USE_WDA_LOCAL_PORT"].flatMap({ Int($0) }) { config.wdaLocalPort = value }
         if let value = environment["SIM_USE_WDA_REMOTE_PORT"].flatMap({ Int($0) }) { config.wdaRemotePort = value }

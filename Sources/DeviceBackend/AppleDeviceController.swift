@@ -25,9 +25,11 @@ public enum DeviceTapTarget: Sendable, Equatable {
 /// `describeUI` renders the iOS outline; the CLI routes a tvOS device's
 /// `ui` to the tvOS path instead.
 public struct AppleDeviceController: Sendable {
+    typealias ConfigResolver = @Sendable (PhysicalDeviceInfo) -> DeviceCapabilityConfig
+
     private let client: AppiumClient
     private let preflight: DevicePreflight
-    private let config: DeviceCapabilityConfig
+    private let configResolver: ConfigResolver
     private let cacheHome: URL
     private let wdaCache: WDADeviceCache
     private let activationSettler: @Sendable () async throws -> Void
@@ -60,11 +62,12 @@ public struct AppleDeviceController: Sendable {
         config: DeviceCapabilityConfig,
         cacheHome: URL,
         wdaCache: WDADeviceCache = .disabled(),
+        configResolver: ConfigResolver? = nil,
         activationSettler: @escaping @Sendable () async throws -> Void
     ) {
         self.client = client
         self.preflight = preflight
-        self.config = config
+        self.configResolver = configResolver ?? { _ in config }
         self.cacheHome = cacheHome
         self.wdaCache = wdaCache
         self.activationSettler = activationSettler
@@ -73,11 +76,19 @@ public struct AppleDeviceController: Sendable {
     public static func live(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) throws -> AppleDeviceController {
-        AppleDeviceController(
+        let wdaCache = WDADeviceCache.live(environment: environment)
+        return AppleDeviceController(
             client: try .live(environment: environment),
             preflight: try .live(environment: environment),
             config: .live(environment: environment),
-            wdaCache: .live(environment: environment)
+            cacheHome: OutlineCache.homeDirectory,
+            wdaCache: wdaCache,
+            configResolver: { info in
+                wdaCache.resolvedConfig(for: info, environment: environment)
+            },
+            activationSettler: {
+                try await Task.sleep(for: .milliseconds(500))
+            }
         )
     }
 
@@ -89,10 +100,12 @@ public struct AppleDeviceController: Sendable {
         bundleId: String? = nil
     ) async throws -> DescribeUIResult {
         let info = try await preflight.run(udid: udid)
-        let caps = try capabilities(for: info, bundleId: bundleId)
+        let config = configResolver(info)
+        let caps = try capabilities(for: info, bundleId: bundleId, config: config)
         let result = try await withActivatedSession(
             info: info,
             capabilities: caps,
+            config: config,
             bundleId: bundleId
         ) { session in
             try DeviceOutlineRenderer.render(source: try await session.source(), includeRaw: includeRaw)
@@ -122,13 +135,15 @@ public struct AppleDeviceController: Sendable {
     ) async throws -> (x: Double, y: Double) {
         let info = try await preflight.run(udid: udid)
         try requireIOS(info, command: "tap")
-        let caps = try capabilities(for: info, bundleId: bundleId)
+        let config = configResolver(info)
+        let caps = try capabilities(for: info, bundleId: bundleId, config: config)
 
         switch target {
         case .point(let x, let y):
             try await withActivatedSession(
                 info: info,
                 capabilities: caps,
+                config: config,
                 bundleId: bundleId
             ) { session in
                 try await session.performPointerActions(PointerAction.tap(x: x, y: y, holdMs: holdMs))
@@ -141,6 +156,7 @@ public struct AppleDeviceController: Sendable {
             try await withActivatedSession(
                 info: info,
                 capabilities: caps,
+                config: config,
                 bundleId: bundleId
             ) { session in
                 try await session.performPointerActions(
@@ -153,6 +169,7 @@ public struct AppleDeviceController: Sendable {
             return try await withActivatedSession(
                 info: info,
                 capabilities: caps,
+                config: config,
                 bundleId: bundleId
             ) { session in
                 let result = try DeviceOutlineRenderer.render(source: try await session.source(), includeRaw: false)
@@ -175,10 +192,12 @@ public struct AppleDeviceController: Sendable {
     ) async throws {
         let info = try await preflight.run(udid: udid)
         try requireIOS(info, command: "swipe")
-        let caps = try capabilities(for: info, bundleId: bundleId)
+        let config = configResolver(info)
+        let caps = try capabilities(for: info, bundleId: bundleId, config: config)
         try await withActivatedSession(
             info: info,
             capabilities: caps,
+            config: config,
             bundleId: bundleId
         ) { session in
             try await session.performPointerActions(
@@ -196,10 +215,12 @@ public struct AppleDeviceController: Sendable {
     ) async throws {
         let info = try await preflight.run(udid: udid)
         try requireIOS(info, command: "type")
-        let caps = try capabilities(for: info, bundleId: bundleId)
+        let config = configResolver(info)
+        let caps = try capabilities(for: info, bundleId: bundleId, config: config)
         try await withActivatedSession(
             info: info,
             capabilities: caps,
+            config: config,
             bundleId: bundleId
         ) { session in
             let element = try await session.activeElement()
@@ -216,11 +237,13 @@ public struct AppleDeviceController: Sendable {
     ) async throws {
         let info = try await preflight.run(udid: udid)
         try requireIOS(info, command: "paste")
-        let caps = try capabilities(for: info, bundleId: bundleId)
+        let config = configResolver(info)
+        let caps = try capabilities(for: info, bundleId: bundleId, config: config)
         let encoded = Data(text.utf8).base64EncodedString()
         try await withActivatedSession(
             info: info,
             capabilities: caps,
+            config: config,
             bundleId: bundleId
         ) { session in
             // Seed the device pasteboard (bypasses IME composition), then
@@ -246,10 +269,12 @@ public struct AppleDeviceController: Sendable {
         bundleId: String? = nil
     ) async throws -> Data {
         let info = try await preflight.run(udid: udid)
-        let caps = try capabilities(for: info, bundleId: bundleId)
+        let config = configResolver(info)
+        let caps = try capabilities(for: info, bundleId: bundleId, config: config)
         return try await withActivatedSession(
             info: info,
             capabilities: caps,
+            config: config,
             bundleId: bundleId
         ) { session in
             try await session.screenshot()
@@ -258,7 +283,11 @@ public struct AppleDeviceController: Sendable {
 
     // MARK: - Helpers
 
-    private func capabilities(for info: PhysicalDeviceInfo, bundleId: String?) throws -> AppiumCapabilities {
+    private func capabilities(
+        for info: PhysicalDeviceInfo,
+        bundleId: String?,
+        config: DeviceCapabilityConfig
+    ) throws -> AppiumCapabilities {
         try DeviceCapabilityBuilder.capabilities(for: info, bundleId: bundleId, config: config)
     }
 
@@ -268,6 +297,7 @@ public struct AppleDeviceController: Sendable {
     private func withActivatedSession<Result>(
         info: PhysicalDeviceInfo,
         capabilities: AppiumCapabilities,
+        config: DeviceCapabilityConfig,
         bundleId: String?,
         operation: @escaping (AppiumSession) async throws -> Result
     ) async throws -> Result {
@@ -282,10 +312,23 @@ public struct AppleDeviceController: Sendable {
         }
 
         return try await wdaCache.withExclusiveRepairLock(for: info.udid) {
-            // Re-plan only after the device lock is held. A process that
-            // waited behind another repair sees the record that process
-            // just committed and goes straight to test-without-building.
-            let plan = wdaCache.plan(for: info, config: config)
+            // Resolve both signing inputs and the trust plan only after the
+            // device lock is held. A process that waited behind a repair must
+            // see the signing config that process just committed, rather than
+            // repairing once more with a stale pre-lock Team/bundle.
+            let lockedConfig = configResolver(info)
+            guard wdaCache.canManage(info: info, config: lockedConfig) else {
+                return try await runInstalledSession(
+                    capabilities: self.capabilities(
+                        for: info,
+                        bundleId: bundleId,
+                        config: lockedConfig
+                    ),
+                    bundleId: bundleId,
+                    operation: operation
+                )
+            }
+            let plan = wdaCache.plan(for: info, config: lockedConfig)
 
             do {
                 return try await runActivatedSession(
@@ -293,10 +336,17 @@ public struct AppleDeviceController: Sendable {
                         for: info,
                         bundleId: bundleId,
                         plan: plan,
+                        config: lockedConfig,
                         usePrebuiltWDA: plan.usePrebuiltWDA
                     ),
                     bundleId: bundleId,
-                    onSessionCreated: { recordCacheSuccess(plan) },
+                    onSessionCreated: {
+                        recordCacheSuccess(
+                            plan,
+                            info: info,
+                            config: lockedConfig
+                        )
+                    },
                     operation: operation
                 )
             } catch let cachedError as AppiumSessionCreationError {
@@ -316,10 +366,17 @@ public struct AppleDeviceController: Sendable {
                             for: info,
                             bundleId: bundleId,
                             plan: plan,
+                            config: lockedConfig,
                             usePrebuiltWDA: false
                         ),
                         bundleId: bundleId,
-                        onSessionCreated: { recordCacheSuccess(plan) },
+                        onSessionCreated: {
+                            recordCacheSuccess(
+                                plan,
+                                info: info,
+                                config: lockedConfig
+                            )
+                        },
                         operation: operation
                     )
                 } catch let repairError as AppiumSessionCreationError {
@@ -369,9 +426,14 @@ public struct AppleDeviceController: Sendable {
         for info: PhysicalDeviceInfo,
         bundleId: String?,
         plan: WDADeviceCache.Plan,
+        config: DeviceCapabilityConfig,
         usePrebuiltWDA: Bool
     ) throws -> AppiumCapabilities {
-        var capabilities = try self.capabilities(for: info, bundleId: bundleId)
+        var capabilities = try self.capabilities(
+            for: info,
+            bundleId: bundleId,
+            config: config
+        )
         capabilities.usePreinstalledWDA = nil
         capabilities.usePrebuiltWDA = usePrebuiltWDA ? true : nil
         capabilities.derivedDataPath = plan.derivedDataPath.path
@@ -380,8 +442,13 @@ public struct AppleDeviceController: Sendable {
         return capabilities
     }
 
-    private func recordCacheSuccess(_ plan: WDADeviceCache.Plan) {
+    private func recordCacheSuccess(
+        _ plan: WDADeviceCache.Plan,
+        info: PhysicalDeviceInfo,
+        config: DeviceCapabilityConfig
+    ) {
         do {
+            try wdaCache.recordSigningConfiguration(for: info, config: config)
             try wdaCache.recordSuccessfulLaunch(plan)
         } catch {
             // The device verb succeeded. The timestamp/cache is an

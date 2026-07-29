@@ -16,9 +16,12 @@ import Glibc
 /// a non-expired provisioning profile. Appium can then safely run
 /// `test-without-building` via `usePrebuiltWDA`; a miss keeps the same
 /// deterministic DerivedData directory so Xcode can still build
-/// incrementally.
+/// incrementally. The signing inputs needed to repair that artifact live in
+/// a separate per-UDID record, so invalidating trust never forgets the Team
+/// and bundle identifier required by the next invocation.
 public struct WDADeviceCache: Sendable {
     public static let currentVersion = 1
+    public static let currentSigningConfigVersion = 1
 
     public struct HostMetadata: Codable, Equatable, Sendable {
         public let xcodeBuild: String
@@ -111,6 +114,39 @@ public struct WDADeviceCache: Sendable {
             self.lastSuccessfulLaunchAt = lastSuccessfulLaunchAt
             self.derivedDataPath = derivedDataPath
             self.runnerAppPath = runnerAppPath
+        }
+    }
+
+    /// Durable signing inputs for one physical Apple device. This is
+    /// deliberately separate from `Record`: invalidating a rejected WDA
+    /// artifact must not forget how to repair it on the next invocation.
+    /// Runtime-owned values such as Appium URLs and proxy ports never live
+    /// here because they can collide across concurrent tasks.
+    public struct SigningConfiguration: Codable, Equatable, Sendable {
+        public let version: Int
+        public let deviceUDID: String
+        public let platformName: String
+        public let wdaBundleIdentifier: String
+        public let developmentTeam: String
+        public let signingIdentity: String
+        public let savedAt: String
+
+        public init(
+            version: Int = WDADeviceCache.currentSigningConfigVersion,
+            deviceUDID: String,
+            platformName: String,
+            wdaBundleIdentifier: String,
+            developmentTeam: String,
+            signingIdentity: String,
+            savedAt: String
+        ) {
+            self.version = version
+            self.deviceUDID = deviceUDID
+            self.platformName = platformName
+            self.wdaBundleIdentifier = wdaBundleIdentifier
+            self.developmentTeam = developmentTeam
+            self.signingIdentity = signingIdentity
+            self.savedAt = savedAt
         }
     }
 
@@ -281,6 +317,10 @@ public struct WDADeviceCache: Sendable {
         directory(for: udid).appendingPathComponent("wda-signing-cache.json")
     }
 
+    public func signingConfigFile(for udid: String) -> URL {
+        directory(for: udid).appendingPathComponent("wda-signing-config.json")
+    }
+
     public func derivedDataPath(for udid: String) -> URL {
         directory(for: udid).appendingPathComponent("wda-derived-data", isDirectory: true)
     }
@@ -302,6 +342,66 @@ public struct WDADeviceCache: Sendable {
             && (info.family == .ios || info.family == .tvos)
             && info.isModern
             && config.xcodeOrgId != nil
+    }
+
+    public func resolvedConfig(
+        for info: PhysicalDeviceInfo,
+        environment: [String: String]
+    ) -> DeviceCapabilityConfig {
+        guard isEnabled,
+              info.family == .ios || info.family == .tvos,
+              info.isModern
+        else {
+            return DeviceCapabilityConfig.live(environment: environment)
+        }
+        var config = DeviceCapabilityConfig()
+        if let persisted = readSigningConfiguration(for: info)
+            ?? legacySigningConfiguration(for: info) {
+            switch info.family {
+            case .ios:
+                config.iosWDABundleId = persisted.wdaBundleIdentifier
+            case .tvos:
+                config.tvosWDABundleId = persisted.wdaBundleIdentifier
+            case .android:
+                break
+            }
+            config.xcodeOrgId = persisted.developmentTeam
+            config.xcodeSigningId = persisted.signingIdentity
+        }
+        return config.applying(environment: environment)
+    }
+
+    /// Persist only after Appium has created a WDA-backed session. Unlike the
+    /// artifact trust record, this does not require host fingerprint metadata:
+    /// a successful one-shot repair must still make the next invocation
+    /// self-sufficient when Xcode/WDA source inspection was unavailable.
+    @discardableResult
+    public func recordSigningConfiguration(
+        for info: PhysicalDeviceInfo,
+        config: DeviceCapabilityConfig
+    ) throws -> SigningConfiguration? {
+        guard isEnabled,
+              info.family == .ios || info.family == .tvos,
+              info.isModern,
+              let developmentTeam = config.xcodeOrgId?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !developmentTeam.isEmpty
+        else {
+            return nil
+        }
+        let bundleIdentifier = info.family == .tvos
+            ? config.tvosWDABundleId
+            : config.iosWDABundleId
+        let record = SigningConfiguration(
+            deviceUDID: info.udid,
+            platformName: Self.platformName(for: info.family),
+            wdaBundleIdentifier: bundleIdentifier,
+            developmentTeam: developmentTeam,
+            signingIdentity: config.xcodeSigningId,
+            savedAt: Self.iso8601(now())
+        )
+        try writeSigningConfiguration(record)
+        return record
     }
 
     public func plan(
@@ -507,11 +607,30 @@ public struct WDADeviceCache: Sendable {
 
     /// Invalidate only the small trust record. Keep DerivedData so the
     /// one repair attempt can be incremental rather than a clean rebuild.
+    /// Before deleting a legacy record, materialize its signing inputs into
+    /// the dedicated config. If that write fails, leave the trust record in
+    /// place so a failed repair cannot make the next invocation forget the
+    /// Team/bundle that previously worked.
     public func invalidate(udid: String) throws {
         let url = recordFile(for: udid)
-        if FileManager.default.fileExists(atPath: url.path) {
-            try FileManager.default.removeItem(at: url)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+
+        if let record = try? readRecord(for: udid),
+           !hasValidSigningConfiguration(
+               for: udid,
+               platformName: record.fingerprint.platformName
+           ) {
+            let fingerprint = record.fingerprint
+            try writeSigningConfiguration(SigningConfiguration(
+                deviceUDID: fingerprint.deviceUDID,
+                platformName: fingerprint.platformName,
+                wdaBundleIdentifier: fingerprint.bundleIdentifier,
+                developmentTeam: fingerprint.developmentTeam,
+                signingIdentity: fingerprint.signingIdentity,
+                savedAt: record.lastSuccessfulLaunchAt
+            ))
         }
+        try FileManager.default.removeItem(at: url)
     }
 
     /// Serialize the complete plan → launch/repair → record transition for
@@ -597,6 +716,103 @@ public struct WDADeviceCache: Sendable {
             try FileManager.default.moveItem(at: temporary, to: target)
         }
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+    }
+
+    private func readSigningConfiguration(
+        for info: PhysicalDeviceInfo
+    ) -> SigningConfiguration? {
+        let url = signingConfigFile(for: info.udid)
+        guard let data = try? Data(contentsOf: url),
+              let config = try? JSONDecoder().decode(SigningConfiguration.self, from: data),
+              Self.isValidSigningConfiguration(
+                  config,
+                  udid: info.udid,
+                  platformName: Self.platformName(for: info.family)
+              )
+        else {
+            return nil
+        }
+        return config
+    }
+
+    private func hasValidSigningConfiguration(
+        for udid: String,
+        platformName: String
+    ) -> Bool {
+        let url = signingConfigFile(for: udid)
+        guard let data = try? Data(contentsOf: url),
+              let config = try? JSONDecoder().decode(SigningConfiguration.self, from: data)
+        else {
+            return false
+        }
+        return Self.isValidSigningConfiguration(
+            config,
+            udid: udid,
+            platformName: platformName
+        )
+    }
+
+    private static func isValidSigningConfiguration(
+        _ config: SigningConfiguration,
+        udid: String,
+        platformName: String
+    ) -> Bool {
+        config.version == Self.currentSigningConfigVersion
+            && config.deviceUDID == udid
+            && config.platformName == platformName
+            && nonBlank(config.wdaBundleIdentifier) != nil
+            && nonBlank(config.developmentTeam) != nil
+            && nonBlank(config.signingIdentity) != nil
+    }
+
+    private func legacySigningConfiguration(
+        for info: PhysicalDeviceInfo
+    ) -> SigningConfiguration? {
+        guard let record = try? readRecord(for: info.udid),
+              record.fingerprint.platformName == Self.platformName(for: info.family)
+        else {
+            return nil
+        }
+        let fingerprint = record.fingerprint
+        return SigningConfiguration(
+            deviceUDID: fingerprint.deviceUDID,
+            platformName: fingerprint.platformName,
+            wdaBundleIdentifier: fingerprint.bundleIdentifier,
+            developmentTeam: fingerprint.developmentTeam,
+            signingIdentity: fingerprint.signingIdentity,
+            savedAt: record.lastSuccessfulLaunchAt
+        )
+    }
+
+    private func writeSigningConfiguration(
+        _ config: SigningConfiguration
+    ) throws {
+        let directory = directory(for: config.deviceUDID)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(config)
+        let target = signingConfigFile(for: config.deviceUDID)
+        let temporary = directory.appendingPathComponent(
+            "wda-signing-config.json.\(UUID().uuidString).tmp"
+        )
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try data.write(to: temporary, options: [.atomic])
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
+        if FileManager.default.fileExists(atPath: target.path) {
+            _ = try FileManager.default.replaceItemAt(target, withItemAt: temporary)
+        } else {
+            try FileManager.default.moveItem(at: temporary, to: target)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+    }
+
+    private static func platformName(for family: Device.Platform) -> String {
+        family == .tvos ? "tvOS" : "iOS"
     }
 
     private static func artifactIdentityMatches(

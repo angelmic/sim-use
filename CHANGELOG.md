@@ -20,7 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     actionable hints; requires a reachable Appium server (`SIM_USE_APPIUM_URL`,
     silently defaults to `http://127.0.0.1:4723`).
   - App-agnostic capability defaults (`SIM_USE_WDA_BUNDLE_ID`, `SIM_USE_TVOS_WDA_BUNDLE_ID`,
-    `SIM_USE_XCODE_ORG_ID`); team/app-specific values are injected via env only.
+    `SIM_USE_XCODE_ORG_ID`); team/app-specific values are never baked into the
+    binary. For iOS, a successful WDA-backed session persists bundle/team/signing
+    inputs per UDID; non-empty environment values remain the highest-priority override.
   - Optional independent Mac/device WDA ports (`SIM_USE_WDA_LOCAL_PORT` and
     `SIM_USE_WDA_REMOTE_PORT`) let a task-owned Appium proxy reach a
     preinstalled WDA on an explicitly different device port; with no remote
@@ -41,6 +43,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `SIM_USE_WDA_CACHE=0` to disable the optimization or
     `SIM_USE_WDA_SOURCE_ROOT` when Appium's WDA sources live outside its
     standard home.
+  - iOS signing inputs now survive trust-cache invalidation in a separate
+    `~/.sim-use/<UDID>/wda-signing-config.json` (`0600`). The next invocation
+    can repair an expired/rejected runner without repeating inline signing
+    environment variables; existing signing-cache fingerprints migrate
+    automatically. Runtime Appium/WDA ports and source paths remain env-only.
   - New `scripts/test-runner-ios-device.sh` (requires-device; SKIPs cleanly when absent).
 
 - Experimental tvOS Simulator support through Appium/XCUITest: top-level `ui` and `screenshot`, the `sim-use tvos` namespace, and focus-aware `tvos remote <up|down|left|right|select|menu|play-pause|home>`. Each operation owns and closes a short-lived WebDriver session; `--bundle-id` (or `SIM_USE_TVOS_BUNDLE_ID` for top-level verbs) restores the target app after a cold WDA launch, and `SIM_USE_APPIUM_URL` overrides the default `http://127.0.0.1:4723` endpoint. `tvos type <text>` enters whole strings into the focused text field through the focus keyboard (WebDriver element sendKeys — the only string-entry channel tvOS exposes; the tvOS WebDriverAgent has no keyboardInput or W3C key actions).
