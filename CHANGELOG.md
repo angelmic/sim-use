@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A repository-owned `sync-upstream-main` skill gives Claude Code and Codex the
+  same five-gate workflow for rebasing this fork onto `upstream/main`, retaining
+  iOS/tvOS extensions, keeping physical-device values out of git, integrating
+  only after approved hardware E2E, and rebuilding the exact xd-labelled binary.
+
 - **DeviceBackend — physical Apple device support (xd 2.0 Phase 1)**: drive real
   iPhones/Apple TVs through Appium/WDA with the same CLI verbs as simulators.
   - `devices` lists physical devices (dash + 40-hex UDIDs) with a `target: sim|device` field.
