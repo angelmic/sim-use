@@ -58,6 +58,10 @@ struct ContentView: View {
         // Input & Text
         case "text-input":
             TextInputView()
+        case "text-area":
+            TextAreaTestView()
+        case "value-roles":
+            ValueRolesView()
         case "paste-test":
             PasteTestView()
         case "key-press":
@@ -99,6 +103,8 @@ struct MainMenuView: View {
         ]),
         ("Input & Text", [
             ("text-input", "Text Input", "Text typed by CLI commands"),
+            ("text-area", "Text Area", "Multi-line editor (TextArea role)"),
+            ("value-roles", "Value Roles", "Controls whose AXValue differs from label"),
             ("paste-test", "Paste Test", "Text pasted via the pasteboard"),
             ("key-press", "Key Press", "Detects CLI key events"),
             ("key-sequence", "Key Sequence", "Detects CLI key sequences")

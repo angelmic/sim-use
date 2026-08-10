@@ -332,8 +332,7 @@ public struct IOSSimTapCommand: SimUseExecutableCommand {
         calibration: OrientationCalibration,
         payload: OutlineCache.Payload
     ) -> CommandAdvisory? {
-        guard let native = calibration.native else { return nil }
-        let size = calibration.orientation.uiSize(native: native)
+        guard let size = calibration.uiScreenSize() else { return nil }
         guard abs(size.width - Double(payload.screen.width)) > 1
             || abs(size.height - Double(payload.screen.height)) > 1
         else { return nil }

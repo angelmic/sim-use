@@ -3,6 +3,7 @@ import Foundation
 import Testing
 import AVFoundation
 import CoreMedia
+import ImageIO
 
 @Suite("Android Record Video Tests", .serialized, .enabled(if: isAndroidE2EEnabled))
 struct AndroidRecordVideoTests {
@@ -95,7 +96,62 @@ struct AndroidRecordVideoTests {
         )
     }
 
+    @Test("android record-video --format gif produces an animated GIF")
+    func recordVideoGIF() async throws {
+        // screenrecord is VFR: a static screen can starve the encoder down
+        // to a single frame, which would make the animation assertion
+        // flaky — drive swipes so the GIF has real motion to sample.
+        let serial = try AndroidE2E.requireSerial()
+        let adbPath = try AndroidE2E.adbPath()
+        try await AndroidE2E.launch(screen: "scroll-test")
+        let activityDriver = Task {
+            for index in 0..<5 {
+                if Task.isCancelled { break }
+                let swipe = Process()
+                swipe.executableURL = URL(fileURLWithPath: adbPath)
+                let (fromY, toY) = index.isMultiple(of: 2) ? ("1500", "600") : ("600", "1500")
+                swipe.arguments = ["-s", serial, "shell", "input", "swipe", "500", fromY, "500", toY, "200"]
+                swipe.standardOutput = Pipe()
+                swipe.standardError = Pipe()
+                try? swipe.run()
+                swipe.waitUntilExit()
+                try? await Task.sleep(nanoseconds: 600_000_000)
+            }
+        }
+        defer { activityDriver.cancel() }
+
+        let result = try await recordForDuration(
+            arguments: ["android", "record-video", "--format", "gif"],
+            duration: 4.0,
+            fileExtension: "gif"
+        )
+        activityDriver.cancel()
+        defer { try? FileManager.default.removeItem(at: result.outputURL) }
+
+        #expect(result.exitCode == 0, "unexpected exit \(result.exitCode); stderr: \(result.stderr)")
+        #expect(result.stderr.contains("Transcoding to GIF"), "stderr: \(result.stderr)")
+        #expect(result.stderr.contains("GIF written"), "stderr: \(result.stderr)")
+
+        let frameCount = try Self.animatedGIFFrameCount(at: result.outputURL)
+        #expect(frameCount > 1, "expected an animated GIF, got \(frameCount) frame(s)")
+
+        let intermediateMP4 = URL(fileURLWithPath: result.outputURL.path + ".recording.mp4")
+        #expect(
+            !FileManager.default.fileExists(atPath: intermediateMP4.path),
+            "intermediate MP4 should be removed after a successful transcode"
+        )
+    }
+
     // MARK: - Helpers
+
+    /// Asserts the GIF magic and returns the frame count.
+    private static func animatedGIFFrameCount(at url: URL) throws -> Int {
+        let data = try Data(contentsOf: url)
+        let magic = String(decoding: data.prefix(6), as: UTF8.self)
+        #expect(magic == "GIF89a" || magic == "GIF87a", "not a GIF file (magic: \(magic))")
+        let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil), "GIF not readable by ImageIO")
+        return CGImageSourceGetCount(source)
+    }
 
     /// Presentation timestamps of every video sample, read pass-through
     /// (no decode) so assertions can see the real muxed sample layout
@@ -126,12 +182,13 @@ struct AndroidRecordVideoTests {
     private func recordForDuration(
         arguments: [String],
         duration: TimeInterval,
-        environment: [String: String] = [:]
+        environment: [String: String] = [:],
+        fileExtension: String = "mp4"
     ) async throws -> (outputURL: URL, fileSize: Int, stderr: String, exitCode: Int32) {
         let serial = try AndroidE2E.requireSerial()
         let simUsePath = try TestHelpers.getSimUsePath()
         let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("sim-use-android-record-\(UUID().uuidString).mp4")
+            .appendingPathComponent("sim-use-android-record-\(UUID().uuidString).\(fileExtension)")
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: simUsePath)

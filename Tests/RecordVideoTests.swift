@@ -3,6 +3,7 @@ import Testing
 import Foundation
 import Darwin
 import AVFoundation
+import ImageIO
 
 @Suite("Record Video Command Tests", .serialized, .enabled(if: isE2EEnabled))
 struct RecordVideoTests {
@@ -176,7 +177,41 @@ struct RecordVideoTests {
         #expect(nominal >= 16 && nominal <= 24, "expected ~20 fps, got \(nominal)")
     }
 
+    @Test("A .gif output records, transcodes, and cleans up the intermediate MP4")
+    func recordVideoGIFOutput() async throws {
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sim-use-record-gif-\(UUID().uuidString).gif")
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+
+        // Format is inferred from the .gif extension — the path the skill
+        // documents for evidence GIFs.
+        let result = try await invokeRecordVideo(duration: 3.0, outputPath: outputURL.path)
+
+        #expect(result.exitCode == 0, "unexpected exit \(result.exitCode); stderr: \(result.stderr)")
+        #expect(result.stderr.contains("Transcoding to GIF"), "stderr: \(result.stderr)")
+        #expect(result.stderr.contains("GIF written"), "stderr: \(result.stderr)")
+        #expect(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == outputURL.path)
+
+        let frameCount = try Self.animatedGIFFrameCount(at: outputURL)
+        #expect(frameCount > 1, "expected an animated GIF, got \(frameCount) frame(s)")
+
+        let intermediateMP4 = URL(fileURLWithPath: outputURL.path + ".recording.mp4")
+        #expect(
+            !FileManager.default.fileExists(atPath: intermediateMP4.path),
+            "intermediate MP4 should be removed after a successful transcode"
+        )
+    }
+
     // MARK: - Helpers
+
+    /// Asserts the GIF magic and returns the frame count.
+    private static func animatedGIFFrameCount(at url: URL) throws -> Int {
+        let data = try Data(contentsOf: url)
+        let magic = String(decoding: data.prefix(6), as: UTF8.self)
+        #expect(magic == "GIF89a" || magic == "GIF87a", "not a GIF file (magic: \(magic))")
+        let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil), "GIF not readable by ImageIO")
+        return CGImageSourceGetCount(source)
+    }
 
     private struct RecordingResult {
         let outputURL: URL

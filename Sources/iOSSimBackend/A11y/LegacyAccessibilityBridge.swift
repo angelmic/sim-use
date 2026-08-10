@@ -27,9 +27,12 @@ extension FBSimulator {
     /// (issue #64).
     ///
     /// `remoteSamplingRegion` overrides upstream's default sampling region
-    /// (the root's UI-space frame). Pass the native-portrait bounds: the
-    /// grid points feed the framebuffer-space point hit-test (issue #34),
-    /// so a UI-space region samples the wrong band under rotation.
+    /// (the root's UI-space frame). Pass the hit-test canvas's portrait
+    /// bounds: the grid points feed the point hit-test, which runs on
+    /// native-portrait AXES (issue #34) in the UI point METRIC
+    /// (`NativePortraitSize.uiMetric`), so a rotated UI-space region
+    /// samples the wrong band, and a pixels/scale region leaves a
+    /// downscaled panel's right/bottom edge unsampled.
     func legacyAccessibilityElements(
         nestedFormat: Bool,
         includeRemoteContent: Bool = false,
@@ -71,9 +74,9 @@ enum LegacyAccessibilityRequestBuilder {
             // Deliberately WITHOUT collectFrameCoverage: the coverage grid
             // is created and filled with UI-space frames while its
             // isFilled gate consumes the discovery grid's
-            // framebuffer-space sample points — under rotation a
+            // portrait-axes sample points — under rotation a
             // discovered element's UI frame would shadow a numerically
-            // overlapping but visually unrelated framebuffer band,
+            // overlapping but visually unrelated portrait-axes band,
             // skipping later sample points. On the only path that runs
             // discovery (an empty shell) the gate's upside is zero anyway:
             // the grid starts empty, so it can never save a probe — it

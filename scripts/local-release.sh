@@ -487,7 +487,7 @@ if [[ "$GH_RELEASE" == "true" ]]; then
     gh release create "$TAG" \
       "$ARCHIVE_PATH" "${ARCHIVE_PATH}.sha256" \
       --repo "$REPO_SLUG" \
-      --title "sim-use ${TAG}" \
+      --title "${TAG}" \
       "${NOTES_ARG[@]}"
     ok "Created release ${TAG}"
   fi
@@ -525,7 +525,7 @@ download URL resolves:
   gh release create ${TAG} \\
     "$ARCHIVE_PATH" \\
     --repo ${RELEASE_OWNER}/${RELEASE_REPO} \\
-    --title "sim-use ${TAG}"
+    --title "${TAG}"
 
 Or rerun this script with --gh-release.
 

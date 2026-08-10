@@ -6,9 +6,10 @@ import SimUseCore
 /// regardless of platform backend.
 public enum VideoOutputFile {
     /// Resolve the user-supplied `--output` argument into a concrete
-    /// MP4 file URL. Both the iOS backend and the cross-platform
-    /// forwarder's Android branch use the same path semantics.
-    public static func prepareOutputURL(output: String?) throws -> URL {
+    /// output file URL (default naming uses `fileExtension`). Every
+    /// platform backend and the cross-platform forwarder use the same
+    /// path semantics.
+    public static func prepareOutputURL(output: String?, fileExtension: String = "mp4") throws -> URL {
         let fileManager = FileManager.default
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
@@ -18,7 +19,7 @@ public enum VideoOutputFile {
         if let providedPath, !providedPath.isEmpty {
             resolvedPath = (providedPath as NSString).expandingTildeInPath
         } else {
-            resolvedPath = "sim-use-video-\(formatter.string(from: Date())).mp4"
+            resolvedPath = "sim-use-video-\(formatter.string(from: Date())).\(fileExtension)"
         }
 
         let baseURL: URL
@@ -30,7 +31,7 @@ public enum VideoOutputFile {
 
         var isDirectory: ObjCBool = false
         if fileManager.fileExists(atPath: baseURL.path, isDirectory: &isDirectory), isDirectory.boolValue {
-            let filename = "sim-use-video-\(formatter.string(from: Date())).mp4"
+            let filename = "sim-use-video-\(formatter.string(from: Date())).\(fileExtension)"
             let directoryURL = baseURL
             if !fileManager.fileExists(atPath: directoryURL.path) {
                 try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true, attributes: nil)

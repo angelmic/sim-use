@@ -19,21 +19,24 @@ struct RecordVideo: SimUseExecutableCommand {
 
     static let configuration = CommandConfiguration(
         commandName: "record-video",
-        abstract: "Record the simulator display to an MP4 file using H.264 encoding"
+        abstract: "Record the simulator display to an MP4 (H.264) or animated GIF file"
     )
 
     @OptionGroup var device: DeviceOptions
 
-    @Option(help: "Frames per second (1-60, default: 30). Ignored on Android (screenrecord uses the device's native variable frame rate).")
+    @Option(help: "Frames per second (1-60; default: 30 for mp4, 10 for gif). Ignored by Android capture (screenrecord uses the device's native variable frame rate), but still applied when sampling a GIF.")
     var fps: Int?
 
     @Option(help: "Quality factor (1-100) controlling bitrate (default: 80)")
     var quality: Int = 80
 
-    @Option(help: "Scale factor (0.1-1.0, default: 1.0)")
-    var scale: Double = 1.0
+    @Option(help: "Scale factor (0.1-1.0; default: 1.0 for mp4, 0.5 for gif)")
+    var scale: Double?
 
-    @Option(help: "Output MP4 file path. Defaults to sim-use-video-<timestamp>.mp4 in the current directory.")
+    @Option(help: "Output format: mp4, gif. Defaults to the --output extension when recognized, else mp4.")
+    var format: RecordingFormat?
+
+    @Option(help: "Output file path. Defaults to sim-use-video-<timestamp>.<format> in the current directory.")
     var output: String?
 
     @OptionGroup var json: JSONOutputOptions
@@ -86,6 +89,7 @@ struct RecordVideo: SimUseExecutableCommand {
         sub.fps = fps
         sub.quality = quality
         sub.scale = scale
+        sub.format = format
         sub.output = output
         sub.device = device
         sub.json = json
@@ -96,6 +100,7 @@ struct RecordVideo: SimUseExecutableCommand {
         let outputURL = try await AndroidRecordVideoCommand.record(
             serial: device.resolved,
             output: output,
+            format: format,
             fps: fps,
             quality: quality,
             scale: scale

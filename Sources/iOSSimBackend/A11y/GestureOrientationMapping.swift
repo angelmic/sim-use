@@ -27,7 +27,7 @@ public enum GestureOrientationMapping {
         explicitHeight: Double?,
         calibration: OrientationCalibration
     ) -> (width: Double, height: Double) {
-        let ui = calibration.native.map { calibration.orientation.uiSize(native: $0) }
+        let ui = calibration.uiScreenSize()
         return (
             explicitWidth ?? ui?.width ?? legacyWidth,
             explicitHeight ?? ui?.height ?? legacyHeight

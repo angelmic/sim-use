@@ -29,6 +29,32 @@ struct VideoFrameProcessingTests {
         return try #require(rep.representation(using: .png, properties: [:]))
     }
 
+    private func makePatternPNG(width: Int, height: Int) throws -> Data {
+        let context = try #require(CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+
+        for y in 0..<height {
+            for x in 0..<width {
+                let red = CGFloat((x * 17 + y * 3) % 256) / 255.0
+                let green = CGFloat((x * 5 + y * 11) % 256) / 255.0
+                let blue = CGFloat((x * 13 + y * 7) % 256) / 255.0
+                context.setFillColor(CGColor(red: red, green: green, blue: blue, alpha: 1))
+                context.fill(CGRect(x: x, y: y, width: 1, height: 1))
+            }
+        }
+
+        let image = try #require(context.makeImage())
+        let rep = NSBitmapImageRep(cgImage: image)
+        return try #require(rep.representation(using: .png, properties: [:]))
+    }
+
     @Test("makeCGImage decodes PNG data and rejects garbage")
     func makeCGImage() throws {
         let png = try makePNG(width: 64, height: 48)
@@ -77,22 +103,30 @@ struct VideoFrameProcessingTests {
         let png = try makePNG(width: 64, height: 64)
         let out = try await VideoFrameUtilities.processJPEGData(png, scale: 1.0, quality: 50)
         #expect(out != png)
-        // JPEG SOI marker.
         #expect(out.prefix(2) == Data([0xFF, 0xD8]))
+        let reencoded = try #require(VideoFrameUtilities.makeCGImage(from: out))
+        #expect(reencoded.width == 64)
+        #expect(reencoded.height == 64)
     }
 
-    @Test("scaling re-encodes to JPEG and preserves the aspect ratio")
+    @Test("JPEG quality changes encoded output size")
+    func processAppliesQuality() async throws {
+        let png = try makePatternPNG(width: 128, height: 96)
+        let low = try await VideoFrameUtilities.processJPEGData(png, scale: 1.0, quality: 20)
+        let high = try await VideoFrameUtilities.processJPEGData(png, scale: 1.0, quality: 90)
+
+        #expect(low != high)
+        #expect(low.count < high.count)
+    }
+
+    @Test("scaling re-encodes to JPEG at the requested pixel dimensions")
     func processScales() async throws {
         let png = try makePNG(width: 100, height: 60)
         let out = try await VideoFrameUtilities.processJPEGData(png, scale: 0.5, quality: 80)
         #expect(out.prefix(2) == Data([0xFF, 0xD8]))
-        // The scale path draws through NSImage.lockFocus, which renders
-        // at the host's backing scale factor — absolute pixel dimensions
-        // are environment-dependent (1x headless vs 2x Retina), so pin
-        // the re-encode and the aspect ratio, not exact sizes.
         let scaled = try #require(VideoFrameUtilities.makeCGImage(from: out))
-        let aspect = Double(scaled.width) / Double(scaled.height)
-        #expect(abs(aspect - 100.0 / 60.0) < 0.15, "aspect drifted: \(scaled.width)x\(scaled.height)")
+        #expect(scaled.width == 50)
+        #expect(scaled.height == 30)
     }
 
     @Test("estimateBitrate clamps to its floor and ceiling and grows with quality")

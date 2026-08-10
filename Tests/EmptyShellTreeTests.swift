@@ -106,12 +106,16 @@ struct EmptyShellTreeTests {
 }
 
 // The retry's grid points feed `translator.object(at:)`, which consumes
-// FRAMEBUFFER points (issue #34) — but upstream's default sampling
-// region is the root element's UI-space frame. Under rotation that
-// region samples the wrong band: points past the native width hit
-// nothing and a whole native band is never sampled at all. The retry
-// must therefore pass an explicit region in native-portrait bounds,
-// which covers every visible pixel regardless of orientation.
+// UI-METRIC points on native-portrait AXES (issue #34 for the axes;
+// `NativePortraitSize.uiMetric` for the metric) — but upstream's default
+// sampling region is the root element's UI-space frame. Under rotation
+// that region samples the wrong band: points past the portrait width hit
+// nothing and a whole band is never sampled at all. The retry must
+// therefore pass an explicit region in the hit-test canvas's portrait
+// bounds — on a display-downscaled device that is the UI-sized canvas,
+// not pixels/scale, or the right/bottom ~4% of the screen is never
+// probed. The shell root's own full-screen frame supplies the UI size
+// the scale needs, before any calibration has run.
 
 @Suite("AccessibilityFetcher.remoteContentSamplingRegion")
 struct RemoteContentSamplingRegionTests {
@@ -127,13 +131,46 @@ struct RemoteContentSamplingRegionTests {
     func unknownNativeYieldsNil() {
         #expect(AccessibilityFetcher.remoteContentSamplingRegion(native: nil) == nil)
     }
+
+    @Test("A downscaled panel samples the UI-sized canvas, not pixels/scale")
+    func downscaledRegionIsUISized() {
+        // iPhone 12 mini: pixels/scale 360x780, UI 375x812. A 360x780
+        // grid would leave the right/bottom ~4% unprobed.
+        let mini = NativePortraitSize(width: 360, height: 780)
+        let scale = UIPointScale(native: mini, uiPortrait: (width: 375, height: 812))!
+        let region = AccessibilityFetcher.remoteContentSamplingRegion(native: mini, uiScale: scale)
+        #expect(region == CGRect(x: 0, y: 0, width: 375, height: 812))
+    }
+
+    @Test("The scale is recoverable from the shell root's display frame")
+    func scaleRecoveredFromShellRoot() {
+        let mini = NativePortraitSize(width: 360, height: 780)
+        // The current-runtimes shell shape: a full-screen-framed
+        // AXApplication with no children (see the shell tests above).
+        let framedShell = [[
+            "frame": ["height": 812, "width": 375, "x": 0, "y": 0],
+            "pid": 5115,
+            "role": "AXApplication",
+        ]] as AnyObject
+        let scale = AccessibilityFetcher.uiScaleFromRawTree(framedShell, native: mini)
+        #expect(!scale.isIdentity)
+        #expect(
+            AccessibilityFetcher.remoteContentSamplingRegion(native: mini, uiScale: scale)
+                == CGRect(x: 0, y: 0, width: 375, height: 812)
+        )
+
+        // The 0.10.0-era bare shell has no frame to recover from —
+        // identity keeps the pre-scale sampling behaviour.
+        let bareShell = [["pid": 123, "role": "AXApplication"]] as AnyObject
+        #expect(AccessibilityFetcher.uiScaleFromRawTree(bareShell, native: mini).isIdentity)
+    }
 }
 
 // The retry request must NOT enable the frame-coverage grid. The grid
 // is created and filled with UI-space frames while its isFilled gate
-// consumes the retry's framebuffer-space sample points — under rotation
+// consumes the retry's portrait-axes sample points — under rotation
 // a discovered element's UI frame shadows a numerically-overlapping but
-// visually unrelated framebuffer band, skipping later sample points.
+// visually unrelated portrait-axes band, skipping later sample points.
 // And on the only path that runs discovery (an empty shell), the gate's
 // upside is zero anyway: the grid starts empty, so it can never save a
 // probe — it can only mis-skip one.

@@ -3,10 +3,7 @@ import Foundation
 import AVFoundation
 import ImageIO
 import os
-#if os(macOS)
-import AppKit
 import SimUseCore
-#endif
 
 /// Stop-path watchdog for the `record-video` command.
 ///
@@ -44,6 +41,7 @@ public enum RecordingFinishWatchdog {
 public enum VideoProcessingError: Error {
     case emptyScreenshot
     case failedToDecodeImage
+    case failedToEncodeImage
     case failedToAllocatePixelBuffer
 }
 
@@ -88,47 +86,71 @@ public struct VideoFrameUtilities {
         return (max(evenWidth, 2), max(evenHeight, 2))
     }
 
+    private static func encodeJPEG(_ image: CGImage, quality: Int) throws -> Data {
+        guard let data = CFDataCreateMutable(nil, 0),
+              let destination = CGImageDestinationCreateWithData(
+                  data,
+                  "public.jpeg" as CFString,
+                  1,
+                  nil
+              ) else {
+            throw VideoProcessingError.failedToEncodeImage
+        }
+
+        let properties = [
+            kCGImageDestinationLossyCompressionQuality: Double(quality) / 100.0
+        ] as CFDictionary
+        CGImageDestinationAddImage(destination, image, properties)
+
+        guard CGImageDestinationFinalize(destination) else {
+            throw VideoProcessingError.failedToEncodeImage
+        }
+
+        return data as Data
+    }
+
     private static func scaleJPEGData(_ data: Data, scale: Double, quality: Int) async throws -> Data {
-        #if os(macOS)
-        guard let image = NSImage(data: data) else {
+        guard let image = makeCGImage(from: data) else {
             throw VideoProcessingError.failedToDecodeImage
         }
 
-        let newSize = NSSize(
-            width: image.size.width * scale,
-            height: image.size.height * scale
+        let dimensions = computeDimensions(for: image, scale: scale)
+        guard let context = CGContext(
+            data: nil,
+            width: dimensions.width,
+            height: dimensions.height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            throw VideoProcessingError.failedToAllocatePixelBuffer
+        }
+
+        context.interpolationQuality = .high
+        context.draw(
+            image,
+            in: CGRect(
+                x: 0,
+                y: 0,
+                width: CGFloat(dimensions.width),
+                height: CGFloat(dimensions.height)
+            )
         )
 
-        let newImage = NSImage(size: newSize)
-        newImage.lockFocus()
-        image.draw(in: NSRect(origin: .zero, size: newSize))
-        newImage.unlockFocus()
-
-        guard let tiffData = newImage.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiffData),
-              let jpegData = bitmap.representation(using: .jpeg, properties: [NSBitmapImageRep.PropertyKey.compressionFactor: Double(quality) / 100.0]) else {
-            throw VideoProcessingError.failedToDecodeImage
+        guard let scaledImage = context.makeImage() else {
+            throw VideoProcessingError.failedToEncodeImage
         }
 
-        return jpegData
-        #else
-        return data
-        #endif
+        return try encodeJPEG(scaledImage, quality: quality)
     }
 
     private static func reencodeJPEGData(_ data: Data, quality: Int) async throws -> Data {
-        #if os(macOS)
-        guard let image = NSImage(data: data),
-              let tiffData = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiffData),
-              let jpegData = bitmap.representation(using: .jpeg, properties: [NSBitmapImageRep.PropertyKey.compressionFactor: Double(quality) / 100.0]) else {
+        guard let image = makeCGImage(from: data) else {
             throw VideoProcessingError.failedToDecodeImage
         }
 
-        return jpegData
-        #else
-        return data
-        #endif
+        return try encodeJPEG(image, quality: quality)
     }
 }
 

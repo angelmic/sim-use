@@ -20,7 +20,7 @@ import SimUseVideo
 public struct AndroidRecordVideoCommand: SimUseExecutableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "record-video",
-        abstract: "Record the Android device display to an MP4 file using H.264 encoding"
+        abstract: "Record the Android device display to an MP4 (H.264) or animated GIF file"
     )
 
     public struct ExecutionResult: Codable {
@@ -32,16 +32,19 @@ public struct AndroidRecordVideoCommand: SimUseExecutableCommand {
 
     @OptionGroup public var device: AndroidDeviceOptions
 
-    @Option(help: "Frames per second (1-60). Ignored by native screenrecord capture (records at the device's variable frame rate); paces the screencap fallback (default: 10).")
+    @Option(help: "Frames per second (1-60). Ignored by native screenrecord capture (records at the device's variable frame rate); paces the screencap fallback (default: 10) and samples a GIF (default: 10).")
     public var fps: Int?
 
     @Option(help: "Quality factor (1-100) controlling bitrate (default: 80)")
     public var quality: Int = 80
 
-    @Option(help: "Scale factor (0.1-1.0, default: 1.0)")
-    public var scale: Double = 1.0
+    @Option(help: "Scale factor (0.1-1.0; default: 1.0 for mp4, 0.5 for gif)")
+    public var scale: Double?
 
-    @Option(help: "Output MP4 file path. Defaults to sim-use-video-<timestamp>.mp4 in the current directory.")
+    @Option(help: "Output format: mp4, gif. Defaults to the --output extension when recognized, else mp4.")
+    public var format: RecordingFormat?
+
+    @Option(help: "Output file path. Defaults to sim-use-video-<timestamp>.<format> in the current directory.")
     public var output: String?
 
     @Flag(name: .customLong("json"), help: "Emit the unified `{ok, data: {path}}` envelope on success. Mirrors the cross-platform `record-video --json` shape.")
@@ -75,6 +78,7 @@ public struct AndroidRecordVideoCommand: SimUseExecutableCommand {
         let outputURL = try await Self.record(
             serial: device.resolved,
             output: output,
+            format: format,
             fps: fps,
             quality: quality,
             scale: scale
@@ -92,23 +96,35 @@ public struct AndroidRecordVideoCommand: SimUseExecutableCommand {
     }
 
     /// Reusable Android recording entry point: runs until SIGINT/SIGTERM,
-    /// then finalizes the MP4 and returns its URL. The top-level
-    /// cross-platform `RecordVideo` forwards here for Android UDIDs so
-    /// both `sim-use android record-video` and `sim-use record-video` go
+    /// then finalizes the MP4 (transcoding to GIF when requested) and
+    /// returns the output URL. The top-level cross-platform `RecordVideo`
+    /// forwards here for Android UDIDs so both
+    /// `sim-use android record-video` and `sim-use record-video` go
     /// through one body — symmetric to
     /// `AndroidScreenshotCommand.performScreenshot`.
     public static func record(
         serial: String,
         output: String?,
+        format: RecordingFormat?,
         fps: Int?,
         quality: Int,
-        scale: Double
+        scale: Double?
     ) async throws -> URL {
         let adb = Adb()
         try assertAdbDeviceOnline(adb: adb, serial: serial)
 
-        let outputURL = try VideoOutputFile.prepareOutputURL(output: output)
-        FileHandle.standardError.write(Data("Recording Android device \(serial) to \(outputURL.path)\n".utf8))
+        // GIF is transcoded from a finished MP4 (see GIFTranscoder); the
+        // capture loop itself always writes H.264, to plan.recordTarget.
+        let plan = try RecordingOutputPlan(format: format, output: output, fps: fps, scale: scale)
+        let options = plan.options
+        let recordTarget = plan.recordTarget
+        // Native screenrecord capture is variable-frame-rate either way;
+        // the flag still paces the screencap fallback and GIF sampling,
+        // so only claim it is ignored when neither applies.
+        if fps != nil && options.format == .mp4 {
+            FileHandle.standardError.write(Data("note: --fps is ignored by Android native capture (screenrecord records at its variable frame rate)\n".utf8))
+        }
+        FileHandle.standardError.write(Data("Recording Android device \(serial) to \(plan.outputURL.path)\n".utf8))
         FileHandle.standardError.write(Data("Press Ctrl+C to stop recording\n".utf8))
 
         let cancellationFlag = CancellationFlag()
@@ -123,28 +139,25 @@ public struct AndroidRecordVideoCommand: SimUseExecutableCommand {
             try await recordVideoAndroidStream(
                 adb: adb,
                 serial: serial,
-                outputURL: outputURL,
-                fps: fps,
+                outputURL: recordTarget,
                 quality: quality,
-                scale: scale,
+                scale: options.scale,
                 cancellationFlag: cancellationFlag
             )
             recordingFinished.cancel()
-            return outputURL
         } catch let unavailable as ScreenrecordUnavailableError {
             FileHandle.standardError.write(Data("warning: screenrecord unavailable (\(unavailable.underlying)); falling back to screencap frames\n".utf8))
             do {
                 try await recordVideoAndroidScreencapLegacy(
                     adb: adb,
                     serial: serial,
-                    outputURL: outputURL,
-                    fps: fps ?? 10,
+                    outputURL: recordTarget,
+                    fps: options.fps ?? 10,
                     quality: quality,
-                    scale: scale,
+                    scale: options.scale,
                     cancellationFlag: cancellationFlag
                 )
                 recordingFinished.cancel()
-                return outputURL
             } catch {
                 recordingFinished.cancel()
                 throw CLIError(errorDescription: "Failed to record video: \(error.localizedDescription)")
@@ -153,6 +166,14 @@ public struct AndroidRecordVideoCommand: SimUseExecutableCommand {
             recordingFinished.cancel()
             throw CLIError(errorDescription: "Failed to record video: \(error.localizedDescription)")
         }
+
+        // Tear the observer down before the transcode so Ctrl+C during a
+        // long GIF encode kills the process instead of being swallowed by
+        // a handler that has nothing left to cancel (invalidate is
+        // idempotent; the defer covers the error paths above).
+        signalObserver.invalidate()
+        try await plan.finalizeRecording()
+        return plan.outputURL
     }
 
     static func assertAdbDeviceOnline(adb: Adb, serial: String) throws {
@@ -179,15 +200,10 @@ public struct AndroidRecordVideoCommand: SimUseExecutableCommand {
         adb: Adb,
         serial: String,
         outputURL: URL,
-        fps: Int?,
         quality: Int,
         scale: Double,
         cancellationFlag: CancellationFlag
     ) async throws {
-        if fps != nil {
-            FileHandle.standardError.write(Data("note: --fps is ignored on Android (screenrecord records at native variable frame rate)\n".utf8))
-        }
-
         let sdk = detectSDK(adb: adb, serial: serial)
         // Detect the display size unconditionally so --quality maps to a
         // bitrate even at the default scale — only the --size *argument* is

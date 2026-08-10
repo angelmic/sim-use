@@ -19,7 +19,7 @@ import SimUseVideo
 public struct IOSSimRecordVideoCommand: SimUseExecutableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "record-video",
-        abstract: "Record the iOS Simulator display to an MP4 file using H.264 encoding"
+        abstract: "Record the iOS Simulator display to an MP4 (H.264) or animated GIF file"
     )
 
     public struct ExecutionResult: Codable {
@@ -38,16 +38,19 @@ public struct IOSSimRecordVideoCommand: SimUseExecutableCommand {
 
     @OptionGroup public var device: DeviceOptions
 
-    @Option(help: "Frames per second (1-60, default: 30).")
+    @Option(help: "Frames per second (1-60; default: 30 for mp4, 10 for gif).")
     public var fps: Int?
 
     @Option(help: "Quality factor (1-100) controlling bitrate (default: 80)")
     public var quality: Int = 80
 
-    @Option(help: "Scale factor (0.1-1.0, default: 1.0)")
-    public var scale: Double = 1.0
+    @Option(help: "Scale factor (0.1-1.0; default: 1.0 for mp4, 0.5 for gif)")
+    public var scale: Double?
 
-    @Option(help: "Output MP4 file path. Defaults to sim-use-video-<timestamp>.mp4 in the current directory.")
+    @Option(help: "Output format: mp4, gif. Defaults to the --output extension when recognized, else mp4.")
+    public var format: RecordingFormat?
+
+    @Option(help: "Output file path. Defaults to sim-use-video-<timestamp>.<format> in the current directory.")
     public var output: String?
 
     @OptionGroup public var json: JSONOutputOptions
@@ -95,8 +98,12 @@ public struct IOSSimRecordVideoCommand: SimUseExecutableCommand {
             throw CLIError(errorDescription: "Simulator \(trimmedUDID) is not booted. Current state: \(stateDescription)")
         }
 
-        let outputURL = try VideoOutputFile.prepareOutputURL(output: output)
-        FileHandle.standardError.write(Data("Recording simulator \(targetSimulator.udid) to \(outputURL.path)\n".utf8))
+        // GIF is transcoded from a finished MP4 (see GIFTranscoder); the
+        // capture loop itself always writes H.264, to plan.recordTarget.
+        let plan = try RecordingOutputPlan(format: format, output: output, fps: fps, scale: scale)
+        let options = plan.options
+        let recordTarget = plan.recordTarget
+        FileHandle.standardError.write(Data("Recording simulator \(targetSimulator.udid) to \(plan.outputURL.path)\n".utf8))
         FileHandle.standardError.write(Data("Press Ctrl+C to stop recording\n".utf8))
 
         let cancellationFlag = CancellationFlag()
@@ -110,27 +117,25 @@ public struct IOSSimRecordVideoCommand: SimUseExecutableCommand {
         do {
             try await recordVideoViaNativeRecording(
                 simulator: targetSimulator,
-                outputURL: outputURL,
-                fps: fps ?? 30,
+                outputURL: recordTarget,
+                fps: options.fps ?? 30,
                 quality: quality,
-                scale: scale,
+                scale: options.scale,
                 cancellationFlag: cancellationFlag
             )
             recordingFinished.cancel()
-            return ExecutionResult(path: outputURL.path)
         } catch let unavailable as RecordingUnavailableError {
             FileHandle.standardError.write(Data("warning: native H.264 recording unavailable (\(unavailable.underlying)); falling back to screenshot capture\n".utf8))
             do {
                 try await recordVideoViaScreenshots(
                     simulator: targetSimulator,
-                    outputURL: outputURL,
-                    fps: fps ?? 10,
+                    outputURL: recordTarget,
+                    fps: options.fps ?? 10,
                     quality: quality,
-                    scale: scale,
+                    scale: options.scale,
                     cancellationFlag: cancellationFlag
                 )
                 recordingFinished.cancel()
-                return ExecutionResult(path: outputURL.path)
             } catch {
                 recordingFinished.cancel()
                 throw CLIError(errorDescription: "Failed to record video: \(error.localizedDescription)")
@@ -139,6 +144,14 @@ public struct IOSSimRecordVideoCommand: SimUseExecutableCommand {
             recordingFinished.cancel()
             throw CLIError(errorDescription: "Failed to record video: \(error.localizedDescription)")
         }
+
+        // Tear the observer down before the transcode so Ctrl+C during a
+        // long GIF encode kills the process instead of being swallowed by
+        // a handler that has nothing left to cancel (invalidate is
+        // idempotent; the defer covers the error paths above).
+        signalObserver.invalidate()
+        try await plan.finalizeRecording()
+        return ExecutionResult(path: plan.outputURL.path)
     }
 
     // MARK: - H.264 native recording

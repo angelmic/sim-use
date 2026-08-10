@@ -468,6 +468,11 @@ sim-use stream-video --device emulator-5554 --format h264 | \
 sim-use record-video --device $UDID --output recording.mp4            # 30 fps default
 sim-use record-video --device $UDID --fps 60 --output smooth.mp4      # up to 60 fps
 sim-use record-video --device $UDID --quality 60 --scale 0.5 --output low-bw.mp4
+
+# Record an animated GIF (cross-platform) — auto-plays inline in PRs / issues / chat
+sim-use record-video --device $UDID --output demo.gif                 # format inferred from extension
+sim-use record-video --device $UDID --format gif                      # sim-use-video-<timestamp>.gif
+sim-use record-video --device $UDID --format gif --fps 15 --scale 0.4 --output demo.gif
 ```
 
 `record-video` captures a real H.264 stream and muxes it straight into the
@@ -478,6 +483,18 @@ native variable frame rate (`--fps` ignored, `--quality` → bitrate,
 limit on API < 34 automatically. Rotating the display mid-recording stops
 capture on Android (an MP4 track can't change frame size). Press Ctrl+C to
 stop; sim-use finalises the MP4 before exiting.
+
+`--format gif` (or a `.gif` `--output` extension) records the same H.264
+stream to an intermediate MP4, then transcodes it into a looping GIF once
+recording stops — sampling at `--fps` (GIF default 10, capped at 50 by the
+format's centisecond delay floor) and scaling at `--scale` (GIF default
+0.5), since full-rate full-scale GIFs get enormous. Per-frame delays
+follow the source timestamps, so Android's variable frame rate stays true
+to wall-clock. If the transcode fails, the intermediate MP4 is preserved
+and its path reported, so the footage is never lost. GIF is meant for
+short clips: the encoder holds every frame in memory until the file is
+written, so for sessions beyond a few hundred frames prefer a lower
+`--fps` or `--format mp4`.
 
 ### Accessibility inspection
 

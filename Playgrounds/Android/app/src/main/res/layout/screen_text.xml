@@ -43,4 +43,18 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="Unfocus" />
+
+    <EditText
+        android:id="@+id/text_area_field"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:contentDescription="Message editor"
+        android:gravity="top"
+        android:hint="Multi-line here"
+        android:importantForAccessibility="yes"
+        android:inputType="textMultiLine"
+        android:minLines="3"
+        android:textSize="16sp"
+        tools:ignore="Autofill,LabelFor" />
 </LinearLayout>

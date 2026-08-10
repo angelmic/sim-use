@@ -29,6 +29,25 @@ struct AndroidTypeTests {
         #expect(AndroidE2E.trailingInt(ui.label(resourceId: "char_count")) == 5)
     }
 
+    @Test("typed text surfaces as value= on a labeled multiline field")
+    func multilineFieldOutlineValue() async throws {
+        try await AndroidE2E.launch(screen: "text-input")
+        try await AndroidE2E.run("tap '#text_area_field'")
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+
+        try await AndroidE2E.run("type \"hello android\"")
+
+        // The field carries a contentDescription, so the label slot is
+        // taken and the typed text must surface via the value= state tag
+        // (parity with the iOS labeled-TextArea regression).
+        let ui = try await AndroidE2E.waitForOutline(timeout: 20) {
+            $0.entry(resourceId: "text_area_field")?.states.contains(#"value="hello android""#) == true
+        }
+        let entry = ui.entry(resourceId: "text_area_field")
+        #expect(entry?.label == "Message editor")
+        #expect(entry?.states.contains(#"value="hello android""#) == true)
+    }
+
     @Test("paste returns the documented Android clipboard error pointing at type")
     func pasteReturnsClipboardHint() async throws {
         try await AndroidE2E.launch(screen: "text-input")

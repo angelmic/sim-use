@@ -96,8 +96,6 @@ public struct IOSSimTypeCommand: SimUseExecutableCommand {
 
     public func execute() async throws -> ExecutionResult {
         let logger = SimUseLogger()
-        try await setup(logger: logger)
-        try await performGlobalSetup(logger: logger)
 
         let inputText: String
         switch (text, useStdin, inputFile) {
@@ -151,15 +149,20 @@ public struct IOSSimTypeCommand: SimUseExecutableCommand {
             throw error
         }
 
-        // Empty input yields zero HID events. Return before building a
-        // session so `type ""` stays a strict no-op — it must not pay
-        // framework/simulator-set initialisation or fail against a
-        // device that is not booted (an agent's `type "$VAR"` with an
-        // empty variable relied on the pre-session-reuse behaviour).
+        // Empty input yields zero HID events. Return before the framework
+        // preflight below so `type ""` stays a strict no-op — it must not
+        // pay the Xcode check, private-framework load, or simulator-set
+        // initialisation, nor fail against a device that is not booted
+        // (an agent's `type "$VAR"` with an empty variable relies on
+        // this). The preflight's `xcode-select` subprocess also made this
+        // path flake on loaded CI runners for no benefit.
         guard !hidEvents.isEmpty else {
             logger.info().log("No HID events to perform (empty input); skipping session.")
             return ExecutionResult()
         }
+
+        try await setup(logger: logger)
+        try await performGlobalSetup(logger: logger)
 
         logger.info().log("Performing HID event sequence for text typing")
 
