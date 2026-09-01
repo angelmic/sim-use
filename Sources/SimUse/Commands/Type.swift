@@ -4,6 +4,7 @@ import Foundation
 import SimUseCore
 import AndroidBackend
 import iOSSimBackend
+import DeviceBackend
 
 /// Top-level cross-platform `type` verb. Owns the flag surface and
 /// resolves the target platform, then delegates to the per-backend
@@ -56,6 +57,12 @@ struct Type: SimUseExecutableCommand {
 
     @OptionGroup var device: DeviceOptions
 
+    @Option(
+        name: .customLong("bundle-id"),
+        help: "Physical Apple device only: attach the WebDriverAgent session to this app and bring it to the foreground, so the text goes into that app's field instead of the home screen. Ignored on the iOS Simulator and Android."
+    )
+    var bundleId: String?
+
     @OptionGroup var json: JSONOutputOptions
 
     var jsonOutput: Bool { json.enabled }
@@ -68,7 +75,11 @@ struct Type: SimUseExecutableCommand {
 
     // The daemon runs with stdin=/dev/null. Bypass daemon when reading
     // from stdin so --stdin actually sees the caller's terminal input.
-    var daemonBypass: Bool { useStdin }
+    // tvOS additionally bypasses so the TVOSCapabilityError rejection
+    // happens in-process, not in a freshly spawned daemon.
+    var daemonBypass: Bool {
+        useStdin || PlatformRouter.bypassesSimulatorDaemon(udid: device.resolved)
+    }
 
     func format(_ result: ExecutionResult) -> CommandOutput { .empty }
 
@@ -80,14 +91,38 @@ struct Type: SimUseExecutableCommand {
         switch PlatformRouter.resolve(udid: device.resolved) {
         case .android:
             return try executeAndroid()
-        case .iOSDevice:
-            throw TargetCapabilityError.physicalIOS(
-                verb: "type",
-                reason: "the accessibility audit channel exposes no keyboard or text-input access.",
-                alternative: "Text input on physical iOS devices is not available yet. If the step only needs an activation, use `sim-use tap '#<id>' / --label`."
-            )
+        case .tvOSSim:
+            throw TVOSCapabilityError(command: "type")
+        case .appleDevice:
+            return try await executeAppleDevice()
         case .iOSSim, .none:
             return try await executeIOSSim()
+        }
+    }
+
+    /// Physical iOS device: send the text to the focused element over
+    /// WebDriverAgent. tvOS is rejected by the controller with
+    /// `TVOSCapabilityError` (use `sim-use tvos type`).
+    private func executeAppleDevice() async throws -> ExecutionResult {
+        try await AppleDeviceController.live().type(udid: device.resolved, text: try resolvedInputText(), bundleId: bundleId)
+        return ExecutionResult()
+    }
+
+    /// The text to enter, from the positional arg, `--stdin`, or `--file`.
+    /// Shared by the Android and physical-device paths so the three input
+    /// forms resolve identically.
+    private func resolvedInputText() throws -> String {
+        switch (text, useStdin, inputFile) {
+        case (let positional?, false, nil):
+            return positional
+        case (nil, true, nil):
+            return IOSSimTypeCommand.readFromStdin()
+        case (nil, false, let file?):
+            return try IOSSimTypeCommand.readFromFile(file)
+        case (nil, false, nil):
+            throw ValidationError("No input provided. Provide text as argument, or use --stdin, or --file.")
+        default:
+            throw ValidationError("Invalid input configuration.")
         }
     }
 
@@ -111,20 +146,7 @@ struct Type: SimUseExecutableCommand {
     }
 
     private func executeAndroid() throws -> ExecutionResult {
-        let inputText: String
-        switch (text, useStdin, inputFile) {
-        case (let positional?, false, nil):
-            inputText = positional
-        case (nil, true, nil):
-            inputText = IOSSimTypeCommand.readFromStdin()
-        case (nil, false, let file?):
-            inputText = try IOSSimTypeCommand.readFromFile(file)
-        case (nil, false, nil):
-            throw ValidationError("No input provided. Provide text as argument, or use --stdin, or --file.")
-        default:
-            throw ValidationError("Invalid input configuration.")
-        }
-        try AndroidTypeCommand.performType(udid: device.resolved, text: inputText, clear: false)
+        try AndroidTypeCommand.performType(udid: device.resolved, text: try resolvedInputText(), clear: false)
         return ExecutionResult()
     }
 }

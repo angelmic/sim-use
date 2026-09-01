@@ -72,19 +72,11 @@ struct AppState: SimUseExecutableCommand {
 
     func execute() async throws -> ExecutionResult {
         let udid = device.resolved
-        let isAndroid: Bool
-        switch PlatformRouter.resolve(udid: udid) {
-        case .android:
-            isAndroid = true
-        case .iOSDevice:
-            throw TargetCapabilityError.physicalIOS(
-                verb: "app-state",
-                reason: "there is no process-list channel for physical devices — the accessibility audit channel reads UI trees only, and crash detection is daemon state physical targets don't participate in yet.",
-                alternative: "Read the foreground app with `sim-use ui` instead; its outline header and content reflect what is currently on screen."
-            )
-        case .iOSSim, .none:
-            isAndroid = false
+        let platform = PlatformRouter.resolve(udid: udid)
+        if platform == .appleDevice {
+            throw DeviceBackendUnsupportedError(command: "app-state", deviceId: udid)
         }
+        let isAndroid = platform == .android
         let probed = isAndroid
             ? AndroidProcessLister.appSnapshot(serial: udid)
             : BundleIdentifierResolver.appSnapshot(udid: udid)
@@ -106,11 +98,26 @@ struct AppState: SimUseExecutableCommand {
         }
 
         return Self.buildResult(
-            platform: isAndroid ? "android" : "ios",
+            platform: Self.platformLabel(for: platform),
             snapshot: snapshot,
             bundleId: bundleId,
             didReset: reset
         )
+    }
+
+    /// JSON envelope discriminator. The Apple probe (`launchctl list` via
+    /// `simctl spawn`) serves iOS and tvOS Simulators alike, so tvOS shares
+    /// it — but the envelope must not claim `ios` for a tvOS device: agents
+    /// key platform-specific behaviour off this field.
+    static func platformLabel(for platform: Platform?) -> String {
+        switch platform {
+        case .android: return "android"
+        case .tvOSSim: return "tvos"
+        // Physical devices are rejected in execute() before this label is
+        // built; the case exists only for switch exhaustiveness.
+        case .appleDevice: return "ios"
+        case .iOSSim, .none: return "ios"
+        }
     }
 
     /// Pure snapshot → result mapping. Exposed for tests.

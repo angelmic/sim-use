@@ -16,6 +16,9 @@ import Testing
 struct RemoteContentRecoveryTests {
 
     private static let port = 8899
+    private static let chooseFileLabelRegex =
+        "选取文件|选择文件|選取檔案|選擇檔案|Choose File"
+    private static let safariTipCloseLabelRegex = "^(關閉|关闭|Close)$"
 
     private func writeUploadPage() throws -> URL {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -77,16 +80,45 @@ struct RemoteContentRecoveryTests {
         _ = try await CommandRunner.run(
             "xcrun simctl openurl \(udid) http://localhost:\(Self.port)/upload.html")
 
+        // A fresh Safari profile can place a one-time feature-tip popover over
+        // the page. Only tap "Close" when the tree proves a popover is present:
+        // Safari's normal toolbar also has an exact "Close" control, and an
+        // unconditional tap would close the upload page on the next test run.
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        let safariTree = try await TestHelpers.runSimUseCommand(
+            "describe-ui --no-raw",
+            simulatorUDID: udid
+        )
+        let popoverCloseMarkers = [
+            "關閉彈出式視窗",
+            "关闭弹出式窗口",
+            "Close Popover",
+        ]
+        if popoverCloseMarkers.contains(where: safariTree.output.localizedCaseInsensitiveContains) {
+            let dismissal = try await TestHelpers.runSimUseCommandAllowFailure(
+                "tap --label-regex '\(Self.safariTipCloseLabelRegex)' --wait-timeout 2",
+                simulatorUDID: udid
+            )
+            try #require(
+                dismissal.exitCode == 0,
+                "Safari feature-tip popover was present but could not be dismissed: \(dismissal.output)"
+            )
+        }
+
         // Two taps on the same localized label: the first hits the page's
         // file input (opening Safari's action sheet, which then occludes
         // the page from the AX tree), the second hits the sheet's file
         // option. The sleep between them lets the sheet settle so the
         // second resolution cannot race the still-exposed page input.
         _ = try await TestHelpers.runSimUseCommand(
-            "tap --label-regex '选取文件|Choose File' --wait-timeout 10", simulatorUDID: udid)
+            "tap --label-regex '\(Self.chooseFileLabelRegex)' --wait-timeout 10",
+            simulatorUDID: udid
+        )
         try await Task.sleep(nanoseconds: 2_000_000_000)
         _ = try await TestHelpers.runSimUseCommand(
-            "tap --label-regex '选取文件|Choose File' --wait-timeout 10", simulatorUDID: udid)
+            "tap --label-regex '\(Self.chooseFileLabelRegex)' --wait-timeout 10",
+            simulatorUDID: udid
+        )
 
         // Let the remote picker sheet settle.
         try await Task.sleep(nanoseconds: 4_000_000_000)

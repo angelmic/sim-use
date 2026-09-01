@@ -155,7 +155,7 @@ extension SimUseExecutableCommand {
         // one-shot audit read would leak an idle daemon per device.
         // Remove this exclusion when #120 lands.
         guard shouldUseDaemon, let udid = simulatorUDIDForDaemon,
-              !PlatformRouter.looksLikePhysicalIOSDevice(udid) else {
+              !PlatformRouter.looksLikeAppleDevice(udid) else {
             // In-process (standalone) path has no persistent tracker, so
             // it carries no cross-command process advisory.
             let result = try await execute()

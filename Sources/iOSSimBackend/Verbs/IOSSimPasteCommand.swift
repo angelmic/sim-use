@@ -52,7 +52,7 @@ public struct IOSSimPasteCommand: SimUseExecutableCommand {
     @Option(name: .customLong("file"), help: "Read text from the specified file.")
     public var inputFile: String?
 
-    @Flag(name: .customLong("replace"), help: "Select all before pasting so the paste replaces the field's current content. Uses Cmd+A in the default path and 'Select All' in the menu path.")
+    @Flag(name: .customLong("replace"), help: "Replace the field's current content. Uses Cmd+A on Simulator, 'Select All' in its menu path, and W3C element clear on a physical iPhone.")
     public var replace: Bool = false
 
     @Flag(name: .customLong("via-menu"), help: "Use the iOS edit menu (long-press → tap Paste) instead of Cmd+V. Touch-only path, works with the soft keyboard showing or hardware keyboard disconnected. Requires --target-id or --target-x/y.")

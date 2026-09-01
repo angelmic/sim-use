@@ -102,12 +102,10 @@ struct StreamVideo: SimUseExecutableCommand {
         switch PlatformRouter.resolve(udid: device.resolved) {
         case .android:
             return try await executeAndroid()
-        case .iOSDevice:
-            throw TargetCapabilityError.physicalIOS(
-                verb: "stream-video",
-                reason: "video capture is not wired up for physical devices (CoreDevice screen recording is capability-gated per device).",
-                alternative: "Capture stills instead: `sim-use screenshot` works on any screen, system apps included."
-            )
+        case .tvOSSim:
+            throw TVOSCapabilityError(command: "stream-video")
+        case .appleDevice:
+            throw DeviceBackendUnsupportedError(command: "stream-video", deviceId: device.resolved)
         case .iOSSim, .none:
             return try await executeIOSSim()
         }

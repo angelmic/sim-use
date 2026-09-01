@@ -1,4 +1,4 @@
-.PHONY: help build test e2e e2e-ios e2e-android e2e-matrix eval clean viewer sync-skills
+.PHONY: help build test e2e e2e-ios e2e-ios-device e2e-android e2e-matrix e2e-tvos e2e-tvos-device eval clean viewer sync-skills
 
 # pipefail below needs bash; macOS /bin/sh is bash-in-posix-mode but
 # being explicit costs nothing.
@@ -30,8 +30,11 @@ help:
 	@echo "  make test    Run unit tests (no simulator needed)"
 	@echo "  make e2e     Run BOTH iOS + Android E2E suites in sequence (~15 min iOS alone)"
 	@echo "  make e2e-ios      Run iOS E2E tests on a booted simulator (~15 min for a full green run)"
+	@echo "  make e2e-ios-device   Run strict iOS physical-device E2E (runtime config required)"
 	@echo "  make e2e-android  Run Android E2E tests on a connected device/emulator"
 	@echo "  make e2e-matrix   Run iOS E2E across Xcode 26/27 x Simulator/Device Hub legs"
+	@echo "  make e2e-tvos     Run tvOS E2E tests on a booted simulator (experimental)"
+	@echo "  make e2e-tvos-device  Run strict tvOS physical-device E2E (runtime config required)"
 	@echo "  make eval    Run agent evals (real \`claude -p\` cost; prompts first)"
 	@echo "  make clean   Clean Swift build artifacts"
 
@@ -76,6 +79,13 @@ e2e:
 e2e-ios:
 	./scripts/test-runner.sh
 
+# iOS physical-device E2E. `--require-device` prevents a release gate from
+# turning green through the runner's hardware-free CI SKIP path. Repository-
+# specific UDID, fixture bundle id, WDA bundle id, and Team id are runtime
+# values from the ignored local config (or explicit environment overrides).
+e2e-ios-device:
+	./scripts/test-runner-ios-device.sh --require-device $(ARGS)
+
 # Android device E2E: builds the CLI + playground fixture, installs it on
 # ANDROID_SERIAL (default emulator-5554), and runs the Android suites.
 e2e-android:
@@ -88,6 +98,18 @@ e2e-android:
 # `make e2e-matrix ARGS="--full all"` or `ARGS="--legs x27-sim,x27-hub"`.
 e2e-matrix:
 	./scripts/e2e-matrix.sh $(ARGS)
+
+# tvOS Simulator E2E (experimental, not part of `make e2e`): builds the CLI
+# + SimUsePlaygroundTV fixture, installs it on a booted tvOS Simulator, and
+# runs TVOSRemoteTests through a local Appium server (`appium --port 4723`,
+# XCUITest driver required).
+e2e-tvos:
+	./scripts/test-runner-tvos.sh
+
+# tvOS physical-device E2E: provisions the fixture, repairs/installs signed
+# WDA when needed, then verifies ui/remote/screenshot with zero allowed SKIPs.
+e2e-tvos-device:
+	./scripts/test-runner-tvos-device.sh --require-device $(ARGS)
 
 # Agent evals: a headless `claude -p` drives the bundled skill against the
 # Playground apps. Each case makes real API calls, so the wrapper checks the

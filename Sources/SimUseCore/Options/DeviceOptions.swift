@@ -18,7 +18,7 @@ import Foundation
 ///
 /// Resolution rule mirrors what every cross-platform forwarder did
 /// pre-extraction: an explicit Android-shape identifier bypasses the
-/// iOS-only `DeviceResolver` (which would otherwise probe `simctl` /
+/// Apple-Simulator `DeviceResolver` (which would otherwise probe `simctl` /
 /// daemon footprints) and is kept verbatim. Everything else flows
 /// through `DeviceResolver.resolve(explicit:)`.
 ///
@@ -30,7 +30,7 @@ import Foundation
 public struct DeviceOptions: ParsableArguments {
     @Option(
         name: .customLong("device"),
-        help: "Target device — iOS Simulator UDID or Android adb serial. Auto-detected by string shape. Optional — defaults to the only booted iOS simulator on the host (or to the SIM_USE_DEVICE / SIM_USE_UDID env var when set)."
+        help: "Target device — iOS/tvOS Simulator UDID or Android adb serial. Auto-detected by string shape. Optional — defaults to the only booted Apple Simulator on the host (or to the SIM_USE_DEVICE / SIM_USE_UDID env var when set)."
     )
     public var device: String?
 
@@ -70,7 +70,7 @@ public struct DeviceOptions: ParsableArguments {
         // Checked on the resolved value, not just the explicit flag, so a
         // physical UDID arriving via SIM_USE_DEVICE / SIM_USE_UDID is
         // treated identically.
-        guard allowPhysical || !PlatformRouter.looksLikePhysicalIOSDevice(candidate) else {
+        guard allowPhysical || !PlatformRouter.looksLikeAppleDevice(candidate) else {
             throw PhysicalIOSDeviceError(identifier: candidate)
         }
         resolved = candidate

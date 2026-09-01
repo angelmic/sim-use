@@ -83,6 +83,11 @@ struct LongPress: SimUseExecutableCommand {
 
     var simulatorUDIDForDaemon: String? { device.resolved }
 
+    /// tvOS never serves this verb (`execute()` throws
+    /// `TVOSCapabilityError`), so reject in-process instead of spawning a
+    /// per-UDID daemon for a device the daemon cannot drive.
+    var daemonBypass: Bool { PlatformRouter.bypassesSimulatorDaemon(udid: device.resolved) }
+
     typealias ExecutionResult = IOSSimTapCommand.ExecutionResult
 
     /// Same shared group validators as `Tap` / `IOSSimTapCommand` —
@@ -102,12 +107,10 @@ struct LongPress: SimUseExecutableCommand {
         switch PlatformRouter.resolve(udid: device.resolved) {
         case .android:
             return try executeAndroid()
-        case .iOSDevice:
-            throw TargetCapabilityError.physicalIOS(
-                verb: "long-press",
-                reason: "the audit channel's only exposed action is Activate — there is no coordinate input or press-duration control.",
-                alternative: "Use `sim-use tap '#<id>' / --label` for a plain activation; long-press gestures are not available on physical iOS devices."
-            )
+        case .tvOSSim:
+            throw TVOSCapabilityError(command: "long-press")
+        case .appleDevice:
+            throw DeviceBackendUnsupportedError(command: "long-press", deviceId: device.resolved)
         case .iOSSim, .none:
             return try await executeIOSSim()
         }

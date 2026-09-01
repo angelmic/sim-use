@@ -1,0 +1,1122 @@
+// SPDX-License-Identifier: Apache-2.0
+import CryptoKit
+import Foundation
+import SimUseCore
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
+
+/// Per-physical-device WebDriverAgent build/signing cache.
+///
+/// A successful timestamp is diagnostic only. The fast path is selected
+/// only when the complete build fingerprint still matches and the cached
+/// runner app has a valid code signature, the expected Team/bundle id, and
+/// a non-expired provisioning profile. Appium can then safely run
+/// `test-without-building` via `usePrebuiltWDA`; a miss keeps the same
+/// deterministic DerivedData directory so Xcode can still build
+/// incrementally. The signing inputs needed to repair that artifact live in
+/// a separate per-UDID record, so invalidating trust never forgets the Team
+/// and bundle identifier required by the next invocation.
+public struct WDADeviceCache: Sendable {
+    public static let currentVersion = 1
+    public static let currentSigningConfigVersion = 1
+
+    public struct HostMetadata: Codable, Equatable, Sendable {
+        public let xcodeBuild: String
+        public let wdaSourceSHA256: String
+
+        public init(xcodeBuild: String, wdaSourceSHA256: String) {
+            self.xcodeBuild = xcodeBuild
+            self.wdaSourceSHA256 = wdaSourceSHA256
+        }
+    }
+
+    public struct Fingerprint: Codable, Equatable, Sendable {
+        public let deviceUDID: String
+        public let platformName: String
+        public let platformVersion: String
+        public let xcodeBuild: String
+        public let wdaSourceSHA256: String
+        public let developmentTeam: String
+        public let bundleIdentifier: String
+        public let signingIdentity: String
+        public let scheme: String
+
+        public init(
+            deviceUDID: String,
+            platformName: String,
+            platformVersion: String,
+            xcodeBuild: String,
+            wdaSourceSHA256: String,
+            developmentTeam: String,
+            bundleIdentifier: String,
+            signingIdentity: String,
+            scheme: String
+        ) {
+            self.deviceUDID = deviceUDID
+            self.platformName = platformName
+            self.platformVersion = platformVersion
+            self.xcodeBuild = xcodeBuild
+            self.wdaSourceSHA256 = wdaSourceSHA256
+            self.developmentTeam = developmentTeam
+            self.bundleIdentifier = bundleIdentifier
+            self.signingIdentity = signingIdentity
+            self.scheme = scheme
+        }
+    }
+
+    public struct Artifact: Equatable, Sendable {
+        public let bundleIdentifier: String
+        public let teamIdentifier: String
+        /// Modification time of the signed CodeResources/executable. This
+        /// records when the cached artifact was signed; it never decides
+        /// whether the artifact is trusted.
+        public let signedAt: Date
+        public let provisioningExpiresAt: Date?
+
+        public init(
+            bundleIdentifier: String,
+            teamIdentifier: String,
+            signedAt: Date,
+            provisioningExpiresAt: Date?
+        ) {
+            self.bundleIdentifier = bundleIdentifier
+            self.teamIdentifier = teamIdentifier
+            self.signedAt = signedAt
+            self.provisioningExpiresAt = provisioningExpiresAt
+        }
+    }
+
+    private struct RunnerInfoPlist: Decodable {
+        let bundleIdentifier: String
+        let executableName: String?
+
+        enum CodingKeys: String, CodingKey {
+            case bundleIdentifier = "CFBundleIdentifier"
+            case executableName = "CFBundleExecutable"
+        }
+    }
+
+    private struct ProvisioningProfilePlist: Decodable {
+        let teamIdentifiers: [String]
+        let expiresAt: Date?
+
+        enum CodingKeys: String, CodingKey {
+            case teamIdentifiers = "TeamIdentifier"
+            case expiresAt = "ExpirationDate"
+        }
+    }
+
+    public struct Record: Codable, Equatable, Sendable {
+        public let version: Int
+        public let fingerprint: Fingerprint
+        public let signedAt: String
+        public let provisioningExpiresAt: String?
+        public let lastSuccessfulLaunchAt: String
+        public let derivedDataPath: String
+        public let runnerAppPath: String
+
+        public init(
+            version: Int = WDADeviceCache.currentVersion,
+            fingerprint: Fingerprint,
+            signedAt: String,
+            provisioningExpiresAt: String?,
+            lastSuccessfulLaunchAt: String,
+            derivedDataPath: String,
+            runnerAppPath: String
+        ) {
+            self.version = version
+            self.fingerprint = fingerprint
+            self.signedAt = signedAt
+            self.provisioningExpiresAt = provisioningExpiresAt
+            self.lastSuccessfulLaunchAt = lastSuccessfulLaunchAt
+            self.derivedDataPath = derivedDataPath
+            self.runnerAppPath = runnerAppPath
+        }
+    }
+
+    /// Durable signing inputs for one physical Apple device. This is
+    /// deliberately separate from `Record`: invalidating a rejected WDA
+    /// artifact must not forget how to repair it on the next invocation.
+    /// Runtime-owned values such as Appium URLs and proxy ports never live
+    /// here because they can collide across concurrent tasks.
+    public struct SigningConfiguration: Codable, Equatable, Sendable {
+        public let version: Int
+        public let deviceUDID: String
+        public let platformName: String
+        public let wdaBundleIdentifier: String
+        public let developmentTeam: String
+        public let signingIdentity: String
+        public let savedAt: String
+
+        public init(
+            version: Int = WDADeviceCache.currentSigningConfigVersion,
+            deviceUDID: String,
+            platformName: String,
+            wdaBundleIdentifier: String,
+            developmentTeam: String,
+            signingIdentity: String,
+            savedAt: String
+        ) {
+            self.version = version
+            self.deviceUDID = deviceUDID
+            self.platformName = platformName
+            self.wdaBundleIdentifier = wdaBundleIdentifier
+            self.developmentTeam = developmentTeam
+            self.signingIdentity = signingIdentity
+            self.savedAt = savedAt
+        }
+    }
+
+    public enum MissReason: String, Codable, Equatable, Sendable {
+        case cacheDisabled
+        case strategyNotCacheable
+        case metadataUnavailable
+        case recordMissing
+        case recordUnreadable
+        case fingerprintChanged
+        case artifactMissing
+        case artifactInvalid
+        case artifactIdentityMismatch
+        case artifactExpired
+    }
+
+    public struct Plan: Equatable, Sendable {
+        public let fingerprint: Fingerprint?
+        public let derivedDataPath: URL
+        public let runnerAppPath: URL
+        public let usePrebuiltWDA: Bool
+        public let missReason: MissReason?
+
+        public init(
+            fingerprint: Fingerprint?,
+            derivedDataPath: URL,
+            runnerAppPath: URL,
+            usePrebuiltWDA: Bool,
+            missReason: MissReason?
+        ) {
+            self.fingerprint = fingerprint
+            self.derivedDataPath = derivedDataPath
+            self.runnerAppPath = runnerAppPath
+            self.usePrebuiltWDA = usePrebuiltWDA
+            self.missReason = missReason
+        }
+    }
+
+    public enum ArtifactValidationError: Error, LocalizedError, Equatable, Sendable {
+        case missing(String)
+        case codesignInvalid(String)
+        case metadataMissing(String)
+        case commandFailed(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .missing(let path):
+                return "WDA runner artifact is missing at \(path)"
+            case .codesignInvalid(let message):
+                return "WDA runner code signature is invalid: \(message)"
+            case .metadataMissing(let key):
+                return "WDA runner signing metadata is missing \(key)"
+            case .commandFailed(let message):
+                return "Could not inspect WDA runner signing metadata: \(message)"
+            }
+        }
+    }
+
+    public enum RecordReadError: Error, LocalizedError, Equatable, Sendable {
+        case missing(String)
+        case corrupt(String)
+        case versionMismatch(got: Int, expected: Int)
+        case udidMismatch(got: String, expected: String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .missing(let path):
+                return "No WDA signing cache exists at \(path)"
+            case .corrupt(let path):
+                return "WDA signing cache is unreadable at \(path)"
+            case .versionMismatch(let got, let expected):
+                return "WDA signing cache version mismatch (got \(got), expected \(expected))"
+            case .udidMismatch(let got, let expected):
+                return "WDA signing cache UDID mismatch (got \(got), expected \(expected))"
+            }
+        }
+    }
+
+    public enum RepairLockError: Error, LocalizedError, Sendable {
+        case openFailed(path: String, code: Int32)
+        case acquireFailed(path: String, code: Int32)
+        case timedOut(path: String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .openFailed(let path, let code):
+                return "Could not open WDA repair lock at \(path): \(Self.message(for: code))"
+            case .acquireFailed(let path, let code):
+                return "Could not acquire WDA repair lock at \(path): \(Self.message(for: code))"
+            case .timedOut(let path):
+                return "Timed out waiting for another sim-use process to finish WDA repair at \(path)"
+            }
+        }
+
+        private static func message(for code: Int32) -> String {
+            String(cString: strerror(code))
+        }
+    }
+
+    public typealias MetadataProvider = @Sendable () throws -> HostMetadata
+    public typealias ArtifactInspector = @Sendable (URL) throws -> Artifact
+    public typealias Clock = @Sendable () -> Date
+
+    private let home: URL
+    private let isEnabled: Bool
+    private let metadataProvider: MetadataProvider
+    private let artifactInspector: ArtifactInspector
+    private let now: Clock
+
+    public init(
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        enabled: Bool = true,
+        metadataProvider: @escaping MetadataProvider,
+        artifactInspector: @escaping ArtifactInspector,
+        now: @escaping Clock = { Date() }
+    ) {
+        self.home = home
+        self.isEnabled = enabled
+        self.metadataProvider = metadataProvider
+        self.artifactInspector = artifactInspector
+        self.now = now
+    }
+
+    /// A no-op dependency for deterministic unit tests and callers that
+    /// explicitly opt out. Production `live` controllers inject `.live`.
+    public static func disabled(
+        home: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> WDADeviceCache {
+        return WDADeviceCache(
+            home: home,
+            enabled: false,
+            metadataProvider: { throw ArtifactValidationError.metadataMissing("host metadata") },
+            artifactInspector: { throw ArtifactValidationError.missing($0.path) }
+        )
+    }
+
+    public static func live(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        home: URL? = nil
+    ) -> WDADeviceCache {
+        let resolvedHome = resolvedStateHome(
+            environment: environment,
+            explicitHome: home
+        )
+        let disabledValues = ["0", "false", "no", "off"]
+        let isEnabled = !disabledValues.contains(
+            environment["SIM_USE_WDA_CACHE"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased() ?? ""
+        )
+        return WDADeviceCache(
+            home: resolvedHome,
+            enabled: isEnabled,
+            metadataProvider: {
+                try liveHostMetadata(environment: environment, home: resolvedHome)
+            },
+            artifactInspector: {
+                try inspectLiveArtifact($0, environment: environment)
+            }
+        )
+    }
+
+    static func resolvedStateHome(
+        environment: [String: String],
+        explicitHome: URL?
+    ) -> URL {
+        if let explicitHome {
+            return explicitHome.standardizedFileURL
+        }
+        if let configured = environment["SIM_USE_WDA_STATE_HOME"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !configured.isEmpty
+        {
+            return URL(fileURLWithPath: configured, isDirectory: true)
+                .standardizedFileURL
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+    }
+
+    // MARK: - Paths
+
+    public func directory(for udid: String) -> URL {
+        home
+            .appendingPathComponent(".sim-use", isDirectory: true)
+            .appendingPathComponent(udid, isDirectory: true)
+    }
+
+    public func recordFile(for udid: String) -> URL {
+        directory(for: udid).appendingPathComponent("wda-signing-cache.json")
+    }
+
+    public func signingConfigFile(for udid: String) -> URL {
+        directory(for: udid).appendingPathComponent("wda-signing-config.json")
+    }
+
+    public func derivedDataPath(for udid: String) -> URL {
+        directory(for: udid).appendingPathComponent("wda-derived-data", isDirectory: true)
+    }
+
+    public func repairLockFile(for udid: String) -> URL {
+        directory(for: udid).appendingPathComponent("wda-repair.lock")
+    }
+
+    // MARK: - Plan / record
+
+    /// A cheap gate used before taking the per-device repair lock. The
+    /// expensive host fingerprint and artifact inspection remain inside
+    /// `plan`, after the lock is held.
+    public func canManage(
+        info: PhysicalDeviceInfo,
+        config: DeviceCapabilityConfig
+    ) -> Bool {
+        isEnabled
+            && (info.family == .ios || info.family == .tvos)
+            && info.isModern
+            && config.xcodeOrgId != nil
+    }
+
+    public func resolvedConfig(
+        for info: PhysicalDeviceInfo,
+        environment: [String: String]
+    ) -> DeviceCapabilityConfig {
+        guard isEnabled,
+              info.family == .ios || info.family == .tvos,
+              info.isModern
+        else {
+            return DeviceCapabilityConfig.live(environment: environment)
+        }
+        var config = DeviceCapabilityConfig()
+        if let persisted = readSigningConfiguration(for: info)
+            ?? legacySigningConfiguration(for: info) {
+            switch info.family {
+            case .ios:
+                config.iosWDABundleId = persisted.wdaBundleIdentifier
+            case .tvos:
+                config.tvosWDABundleId = persisted.wdaBundleIdentifier
+            case .android:
+                break
+            }
+            config.xcodeOrgId = persisted.developmentTeam
+            config.xcodeSigningId = persisted.signingIdentity
+        }
+        return config.applying(environment: environment)
+    }
+
+    /// Persist only after Appium has created a WDA-backed session. Unlike the
+    /// artifact trust record, this does not require host fingerprint metadata:
+    /// a successful one-shot repair must still make the next invocation
+    /// self-sufficient when Xcode/WDA source inspection was unavailable.
+    @discardableResult
+    public func recordSigningConfiguration(
+        for info: PhysicalDeviceInfo,
+        config: DeviceCapabilityConfig
+    ) throws -> SigningConfiguration? {
+        guard isEnabled,
+              info.family == .ios || info.family == .tvos,
+              info.isModern,
+              let developmentTeam = config.xcodeOrgId?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !developmentTeam.isEmpty
+        else {
+            return nil
+        }
+        let bundleIdentifier = info.family == .tvos
+            ? config.tvosWDABundleId
+            : config.iosWDABundleId
+        let record = SigningConfiguration(
+            deviceUDID: info.udid,
+            platformName: Self.platformName(for: info.family),
+            wdaBundleIdentifier: bundleIdentifier,
+            developmentTeam: developmentTeam,
+            signingIdentity: config.xcodeSigningId,
+            savedAt: Self.iso8601(now())
+        )
+        try writeSigningConfiguration(record)
+        return record
+    }
+
+    public func plan(
+        for info: PhysicalDeviceInfo,
+        config: DeviceCapabilityConfig
+    ) -> Plan {
+        let derivedDataPath = derivedDataPath(for: info.udid)
+        let runnerAppPath = Self.runnerAppPath(in: derivedDataPath, family: info.family)
+
+        guard isEnabled else {
+            return miss(
+                .cacheDisabled,
+                fingerprint: nil,
+                derivedDataPath: derivedDataPath,
+                runnerAppPath: runnerAppPath
+            )
+        }
+        // Both modern Apple families use the signed host artifact as their
+        // deterministic launch/repair source. A valid record selects
+        // test-without-building immediately; a miss uses the same stable
+        // DerivedData directory for one incremental build.
+        guard info.family == .ios || info.family == .tvos, info.isModern else {
+            return miss(
+                .strategyNotCacheable,
+                fingerprint: nil,
+                derivedDataPath: derivedDataPath,
+                runnerAppPath: runnerAppPath
+            )
+        }
+        guard let team = config.xcodeOrgId else {
+            return miss(
+                .metadataUnavailable,
+                fingerprint: nil,
+                derivedDataPath: derivedDataPath,
+                runnerAppPath: runnerAppPath
+            )
+        }
+
+        let metadata: HostMetadata
+        do {
+            metadata = try metadataProvider()
+        } catch {
+            return miss(
+                .metadataUnavailable,
+                fingerprint: nil,
+                derivedDataPath: derivedDataPath,
+                runnerAppPath: runnerAppPath
+            )
+        }
+        let isTVOS = info.family == .tvos
+        let fingerprint = Fingerprint(
+            deviceUDID: info.udid,
+            platformName: isTVOS ? "tvOS" : "iOS",
+            platformVersion: info.osVersion ?? info.osMajorVersion.map(String.init) ?? "unknown",
+            xcodeBuild: metadata.xcodeBuild,
+            wdaSourceSHA256: metadata.wdaSourceSHA256,
+            developmentTeam: team,
+            bundleIdentifier: isTVOS ? config.tvosWDABundleId : config.iosWDABundleId,
+            signingIdentity: config.xcodeSigningId,
+            scheme: isTVOS ? "WebDriverAgentRunner_tvOS" : "WebDriverAgentRunner"
+        )
+
+        let record: Record
+        do {
+            record = try readRecord(for: info.udid)
+        } catch let error as RecordReadError {
+            let reason: MissReason
+            if case .missing = error {
+                reason = .recordMissing
+            } else {
+                reason = .recordUnreadable
+            }
+            return miss(
+                reason,
+                fingerprint: fingerprint,
+                derivedDataPath: derivedDataPath,
+                runnerAppPath: runnerAppPath
+            )
+        } catch {
+            return miss(
+                .recordUnreadable,
+                fingerprint: fingerprint,
+                derivedDataPath: derivedDataPath,
+                runnerAppPath: runnerAppPath
+            )
+        }
+
+        guard record.fingerprint == fingerprint,
+              record.derivedDataPath == derivedDataPath.path,
+              record.runnerAppPath == runnerAppPath.path
+        else {
+            return miss(
+                .fingerprintChanged,
+                fingerprint: fingerprint,
+                derivedDataPath: derivedDataPath,
+                runnerAppPath: runnerAppPath
+            )
+        }
+        guard FileManager.default.fileExists(atPath: runnerAppPath.path) else {
+            return miss(
+                .artifactMissing,
+                fingerprint: fingerprint,
+                derivedDataPath: derivedDataPath,
+                runnerAppPath: runnerAppPath
+            )
+        }
+
+        let artifact: Artifact
+        do {
+            artifact = try artifactInspector(runnerAppPath)
+        } catch {
+            return miss(
+                .artifactInvalid,
+                fingerprint: fingerprint,
+                derivedDataPath: derivedDataPath,
+                runnerAppPath: runnerAppPath
+            )
+        }
+        guard Self.artifactIdentityMatches(artifact, fingerprint: fingerprint) else {
+            return miss(
+                .artifactIdentityMismatch,
+                fingerprint: fingerprint,
+                derivedDataPath: derivedDataPath,
+                runnerAppPath: runnerAppPath
+            )
+        }
+        guard let expires = artifact.provisioningExpiresAt else {
+            return miss(
+                .artifactInvalid,
+                fingerprint: fingerprint,
+                derivedDataPath: derivedDataPath,
+                runnerAppPath: runnerAppPath
+            )
+        }
+        if expires <= now() {
+            return miss(
+                .artifactExpired,
+                fingerprint: fingerprint,
+                derivedDataPath: derivedDataPath,
+                runnerAppPath: runnerAppPath
+            )
+        }
+        return Plan(
+            fingerprint: fingerprint,
+            derivedDataPath: derivedDataPath,
+            runnerAppPath: runnerAppPath,
+            usePrebuiltWDA: true,
+            missReason: nil
+        )
+    }
+
+    /// Persist a record only after Appium opened a real session and the
+    /// resulting local artifact passes the same signature checks used by a
+    /// cache hit. Returns nil when caching is disabled/unavailable.
+    @discardableResult
+    public func recordSuccessfulLaunch(_ plan: Plan) throws -> Record? {
+        guard isEnabled, let fingerprint = plan.fingerprint else { return nil }
+        guard FileManager.default.fileExists(atPath: plan.runnerAppPath.path) else {
+            throw ArtifactValidationError.missing(plan.runnerAppPath.path)
+        }
+        let artifact = try artifactInspector(plan.runnerAppPath)
+        guard Self.artifactIdentityMatches(artifact, fingerprint: fingerprint) else {
+            throw ArtifactValidationError.metadataMissing("expected Team/bundle identifier")
+        }
+        guard let expires = artifact.provisioningExpiresAt else {
+            throw ArtifactValidationError.metadataMissing("provisioning profile ExpirationDate")
+        }
+        if expires <= now() {
+            throw ArtifactValidationError.codesignInvalid("provisioning profile has expired")
+        }
+
+        let record = Record(
+            fingerprint: fingerprint,
+            signedAt: Self.iso8601(artifact.signedAt),
+            provisioningExpiresAt: artifact.provisioningExpiresAt.map(Self.iso8601),
+            lastSuccessfulLaunchAt: Self.iso8601(now()),
+            derivedDataPath: plan.derivedDataPath.path,
+            runnerAppPath: plan.runnerAppPath.path
+        )
+        try writeRecord(record)
+        return record
+    }
+
+    public func readRecord(for udid: String) throws -> Record {
+        let url = recordFile(for: udid)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw RecordReadError.missing(url.path)
+        }
+        let record: Record
+        do {
+            record = try JSONDecoder().decode(Record.self, from: Data(contentsOf: url))
+        } catch {
+            throw RecordReadError.corrupt(url.path)
+        }
+        guard record.version == Self.currentVersion else {
+            throw RecordReadError.versionMismatch(got: record.version, expected: Self.currentVersion)
+        }
+        guard record.fingerprint.deviceUDID == udid else {
+            throw RecordReadError.udidMismatch(got: record.fingerprint.deviceUDID, expected: udid)
+        }
+        return record
+    }
+
+    /// Invalidate only the small trust record. Keep DerivedData so the
+    /// one repair attempt can be incremental rather than a clean rebuild.
+    /// Before deleting a legacy record, materialize its signing inputs into
+    /// the dedicated config. If that write fails, leave the trust record in
+    /// place so a failed repair cannot make the next invocation forget the
+    /// Team/bundle that previously worked.
+    public func invalidate(udid: String) throws {
+        let url = recordFile(for: udid)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+
+        if let record = try? readRecord(for: udid),
+           !hasValidSigningConfiguration(
+               for: udid,
+               platformName: record.fingerprint.platformName
+           ) {
+            let fingerprint = record.fingerprint
+            try writeSigningConfiguration(SigningConfiguration(
+                deviceUDID: fingerprint.deviceUDID,
+                platformName: fingerprint.platformName,
+                wdaBundleIdentifier: fingerprint.bundleIdentifier,
+                developmentTeam: fingerprint.developmentTeam,
+                signingIdentity: fingerprint.signingIdentity,
+                savedAt: record.lastSuccessfulLaunchAt
+            ))
+        }
+        try FileManager.default.removeItem(at: url)
+    }
+
+    /// Serialize the complete plan → launch/repair → record transition for
+    /// one device across independent sim-use processes. BSD `flock` is
+    /// released by the kernel if a process exits, so a crashed xcodebuild
+    /// cannot leave a permanent stale mutex.
+    public func withExclusiveRepairLock<Result>(
+        for udid: String,
+        operation: () async throws -> Result
+    ) async throws -> Result {
+        let directory = directory(for: udid)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let lockFile = repairLockFile(for: udid)
+        let descriptor = lockFile.path.withCString {
+            open($0, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+        }
+        guard descriptor >= 0 else {
+            throw RepairLockError.openFailed(path: lockFile.path, code: errno)
+        }
+        defer {
+            _ = flock(descriptor, LOCK_UN)
+            _ = close(descriptor)
+        }
+        _ = fcntl(descriptor, F_SETFD, FD_CLOEXEC)
+
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(180))
+        while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+            let code = errno
+            guard code == EWOULDBLOCK || code == EAGAIN else {
+                throw RepairLockError.acquireFailed(path: lockFile.path, code: code)
+            }
+            guard clock.now < deadline else {
+                throw RepairLockError.timedOut(path: lockFile.path)
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+
+        return try await operation()
+    }
+
+    // MARK: - Private cache helpers
+
+    private func miss(
+        _ reason: MissReason,
+        fingerprint: Fingerprint?,
+        derivedDataPath: URL,
+        runnerAppPath: URL
+    ) -> Plan {
+        Plan(
+            fingerprint: fingerprint,
+            derivedDataPath: derivedDataPath,
+            runnerAppPath: runnerAppPath,
+            usePrebuiltWDA: false,
+            missReason: reason
+        )
+    }
+
+    private func writeRecord(_ record: Record) throws {
+        let directory = directory(for: record.fingerprint.deviceUDID)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(record)
+        let target = recordFile(for: record.fingerprint.deviceUDID)
+        let temporary = directory.appendingPathComponent(
+            "wda-signing-cache.json.\(UUID().uuidString).tmp"
+        )
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try data.write(to: temporary, options: [.atomic])
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
+        if FileManager.default.fileExists(atPath: target.path) {
+            _ = try FileManager.default.replaceItemAt(target, withItemAt: temporary)
+        } else {
+            try FileManager.default.moveItem(at: temporary, to: target)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+    }
+
+    private func readSigningConfiguration(
+        for info: PhysicalDeviceInfo
+    ) -> SigningConfiguration? {
+        let url = signingConfigFile(for: info.udid)
+        guard let data = try? Data(contentsOf: url),
+              let config = try? JSONDecoder().decode(SigningConfiguration.self, from: data),
+              Self.isValidSigningConfiguration(
+                  config,
+                  udid: info.udid,
+                  platformName: Self.platformName(for: info.family)
+              )
+        else {
+            return nil
+        }
+        return config
+    }
+
+    private func hasValidSigningConfiguration(
+        for udid: String,
+        platformName: String
+    ) -> Bool {
+        let url = signingConfigFile(for: udid)
+        guard let data = try? Data(contentsOf: url),
+              let config = try? JSONDecoder().decode(SigningConfiguration.self, from: data)
+        else {
+            return false
+        }
+        return Self.isValidSigningConfiguration(
+            config,
+            udid: udid,
+            platformName: platformName
+        )
+    }
+
+    private static func isValidSigningConfiguration(
+        _ config: SigningConfiguration,
+        udid: String,
+        platformName: String
+    ) -> Bool {
+        config.version == Self.currentSigningConfigVersion
+            && config.deviceUDID == udid
+            && config.platformName == platformName
+            && nonBlank(config.wdaBundleIdentifier) != nil
+            && nonBlank(config.developmentTeam) != nil
+            && nonBlank(config.signingIdentity) != nil
+    }
+
+    private func legacySigningConfiguration(
+        for info: PhysicalDeviceInfo
+    ) -> SigningConfiguration? {
+        guard let record = try? readRecord(for: info.udid),
+              record.fingerprint.platformName == Self.platformName(for: info.family)
+        else {
+            return nil
+        }
+        let fingerprint = record.fingerprint
+        return SigningConfiguration(
+            deviceUDID: fingerprint.deviceUDID,
+            platformName: fingerprint.platformName,
+            wdaBundleIdentifier: fingerprint.bundleIdentifier,
+            developmentTeam: fingerprint.developmentTeam,
+            signingIdentity: fingerprint.signingIdentity,
+            savedAt: record.lastSuccessfulLaunchAt
+        )
+    }
+
+    private func writeSigningConfiguration(
+        _ config: SigningConfiguration
+    ) throws {
+        let directory = directory(for: config.deviceUDID)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(config)
+        let target = signingConfigFile(for: config.deviceUDID)
+        let temporary = directory.appendingPathComponent(
+            "wda-signing-config.json.\(UUID().uuidString).tmp"
+        )
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try data.write(to: temporary, options: [.atomic])
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
+        if FileManager.default.fileExists(atPath: target.path) {
+            _ = try FileManager.default.replaceItemAt(target, withItemAt: temporary)
+        } else {
+            try FileManager.default.moveItem(at: temporary, to: target)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+    }
+
+    private static func platformName(for family: Device.Platform) -> String {
+        family == .tvos ? "tvOS" : "iOS"
+    }
+
+    private static func artifactIdentityMatches(
+        _ artifact: Artifact,
+        fingerprint: Fingerprint
+    ) -> Bool {
+        let expectedBundleIds = [
+            fingerprint.bundleIdentifier,
+            "\(fingerprint.bundleIdentifier).xctrunner",
+        ]
+        return artifact.teamIdentifier == fingerprint.developmentTeam
+            && expectedBundleIds.contains(artifact.bundleIdentifier)
+    }
+
+    private static func runnerAppPath(
+        in derivedDataPath: URL,
+        family: Device.Platform
+    ) -> URL {
+        let product: String
+        switch family {
+        case .tvos:
+            product = "Debug-appletvos/WebDriverAgentRunner_tvOS-Runner.app"
+        case .ios, .android:
+            product = "Debug-iphoneos/WebDriverAgentRunner-Runner.app"
+        }
+        return derivedDataPath
+            .appendingPathComponent("Build/Products", isDirectory: true)
+            .appendingPathComponent(product, isDirectory: true)
+    }
+
+    private static func iso8601(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.string(from: date)
+    }
+
+    // MARK: - Live metadata / signature inspection
+
+    private static func liveHostMetadata(
+        environment: [String: String],
+        home: URL
+    ) throws -> HostMetadata {
+        let xcode = try runProcess(
+            executable: "/usr/bin/xcodebuild",
+            arguments: ["-version"],
+            environment: environment
+        )
+        guard xcode.status == 0 else {
+            throw ArtifactValidationError.commandFailed(
+                nonBlank(xcode.stderr) ?? nonBlank(xcode.stdout) ?? "xcodebuild -version exited \(xcode.status)"
+            )
+        }
+        let xcodeBuild = xcode.stdout
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+            .joined(separator: "; ")
+
+        let appiumHome: URL
+        if let raw = environment["APPIUM_HOME"], !raw.isEmpty {
+            appiumHome = URL(fileURLWithPath: raw, isDirectory: true)
+        } else {
+            appiumHome = home.appendingPathComponent(".appium", isDirectory: true)
+        }
+        let sourceRoot: URL
+        if let raw = environment["SIM_USE_WDA_SOURCE_ROOT"], !raw.isEmpty {
+            sourceRoot = URL(fileURLWithPath: raw, isDirectory: true)
+        } else {
+            sourceRoot = appiumHome
+                .appendingPathComponent("node_modules/appium-xcuitest-driver/node_modules/appium-webdriveragent")
+        }
+        return HostMetadata(
+            xcodeBuild: xcodeBuild,
+            wdaSourceSHA256: try sourceFingerprint(root: sourceRoot)
+        )
+    }
+
+    private static func sourceFingerprint(root: URL) throws -> String {
+        let fileManager = FileManager.default
+        let roots = [
+            root.appendingPathComponent("Configurations", isDirectory: true),
+            root.appendingPathComponent("PrivateHeaders", isDirectory: true),
+            root.appendingPathComponent("WebDriverAgentLib", isDirectory: true),
+            root.appendingPathComponent("WebDriverAgentRunner", isDirectory: true),
+            root.appendingPathComponent("WebDriverAgent.xcodeproj", isDirectory: true),
+            root.appendingPathComponent("Scripts", isDirectory: true),
+            root.appendingPathComponent("package.json"),
+        ]
+        var files: [URL] = []
+        for candidate in roots {
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: candidate.path, isDirectory: &isDirectory) else {
+                continue
+            }
+            if !isDirectory.boolValue {
+                files.append(candidate)
+                continue
+            }
+            guard let enumerator = fileManager.enumerator(
+                at: candidate,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+            for case let file as URL in enumerator {
+                if (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
+                    files.append(file)
+                }
+            }
+        }
+        guard !files.isEmpty else {
+            throw ArtifactValidationError.missing(root.path)
+        }
+        files.sort { $0.path < $1.path }
+
+        var hasher = SHA256()
+        for file in files {
+            let relative = file.path.hasPrefix(root.path)
+                ? String(file.path.dropFirst(root.path.count))
+                : file.path
+            hasher.update(data: Data(relative.utf8))
+            hasher.update(data: Data([0]))
+            hasher.update(data: try Data(contentsOf: file, options: [.mappedIfSafe]))
+            hasher.update(data: Data([0]))
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func inspectLiveArtifact(
+        _ app: URL,
+        environment: [String: String]
+    ) throws -> Artifact {
+        guard FileManager.default.fileExists(atPath: app.path) else {
+            throw ArtifactValidationError.missing(app.path)
+        }
+        let verification = try runProcess(
+            executable: "/usr/bin/codesign",
+            arguments: ["--verify", "--deep", "--strict", app.path],
+            environment: environment
+        )
+        guard verification.status == 0 else {
+            throw ArtifactValidationError.codesignInvalid(
+                nonBlank(verification.stderr)
+                    ?? nonBlank(verification.stdout)
+                    ?? "codesign exited \(verification.status)"
+            )
+        }
+
+        let infoURL = app.appendingPathComponent("Info.plist")
+        guard let info = try? PropertyListDecoder().decode(
+            RunnerInfoPlist.self,
+            from: Data(contentsOf: infoURL)
+        ) else {
+            throw ArtifactValidationError.metadataMissing("CFBundleIdentifier")
+        }
+
+        let profileURL = app.appendingPathComponent("embedded.mobileprovision")
+        let profileResult = try runProcess(
+            executable: "/usr/bin/security",
+            arguments: ["cms", "-D", "-i", profileURL.path],
+            environment: environment
+        )
+        guard profileResult.status == 0,
+              let profileData = profileResult.stdout.data(using: .utf8),
+              let profile = try? PropertyListDecoder().decode(
+                ProvisioningProfilePlist.self,
+                from: profileData
+              )
+        else {
+            throw ArtifactValidationError.commandFailed(
+                nonBlank(profileResult.stderr)
+                    ?? nonBlank(profileResult.stdout)
+                    ?? "security cms exited \(profileResult.status)"
+            )
+        }
+        guard let teamIdentifier = profile.teamIdentifiers.first else {
+            throw ArtifactValidationError.metadataMissing("TeamIdentifier")
+        }
+        let expiresAt = profile.expiresAt
+
+        let codeResources = app.appendingPathComponent("_CodeSignature/CodeResources")
+        let executable = info.executableName.map { app.appendingPathComponent($0) }
+        let timestampCandidate: URL
+        if FileManager.default.fileExists(atPath: codeResources.path) {
+            timestampCandidate = codeResources
+        } else if let executable {
+            timestampCandidate = executable
+        } else {
+            throw ArtifactValidationError.metadataMissing("CFBundleExecutable")
+        }
+        let attributes = try FileManager.default.attributesOfItem(atPath: timestampCandidate.path)
+        guard let signedAt = attributes[.modificationDate] as? Date else {
+            throw ArtifactValidationError.metadataMissing("signature modification date")
+        }
+        return Artifact(
+            bundleIdentifier: info.bundleIdentifier,
+            teamIdentifier: teamIdentifier,
+            signedAt: signedAt,
+            provisioningExpiresAt: expiresAt
+        )
+    }
+
+    struct ProcessResult {
+        let status: Int32
+        let stdout: String
+        let stderr: String
+    }
+
+    static func runProcess(
+        executable: String,
+        arguments: [String],
+        environment: [String: String]
+    ) throws -> ProcessResult {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.environment = environment
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        let lock = NSLock()
+        var stdoutData = Data()
+        var stderrData = Data()
+        stdout.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else { return }
+            lock.lock()
+            stdoutData.append(chunk)
+            lock.unlock()
+        }
+        stderr.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else { return }
+            lock.lock()
+            stderrData.append(chunk)
+            lock.unlock()
+        }
+
+        do {
+            try process.run()
+        } catch {
+            stdout.fileHandleForReading.readabilityHandler = nil
+            stderr.fileHandleForReading.readabilityHandler = nil
+            throw ArtifactValidationError.commandFailed(error.localizedDescription)
+        }
+        process.waitUntilExit()
+
+        stdout.fileHandleForReading.readabilityHandler = nil
+        stderr.fileHandleForReading.readabilityHandler = nil
+        lock.lock()
+        stdoutData.append(stdout.fileHandleForReading.readDataToEndOfFile())
+        stderrData.append(stderr.fileHandleForReading.readDataToEndOfFile())
+        lock.unlock()
+
+        return ProcessResult(
+            status: process.terminationStatus,
+            stdout: String(decoding: stdoutData, as: UTF8.self),
+            stderr: String(decoding: stderrData, as: UTF8.self)
+        )
+    }
+
+    private static func nonBlank(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}

@@ -4,6 +4,7 @@ import Foundation
 import SimUseCore
 import AndroidBackend
 import iOSSimBackend
+import DeviceBackend
 
 /// Top-level cross-platform `paste` verb. Owns the flag surface and
 /// resolves the target platform, then delegates to the per-backend
@@ -91,10 +92,10 @@ struct Paste: SimUseExecutableCommand {
     @Option(name: .customLong("file"), help: "Read text from the specified file.")
     var inputFile: String?
 
-    @Flag(name: .customLong("replace"), help: "Select all before pasting so the paste replaces the field's current content. Uses Cmd+A in the default path and 'Select All' in the menu path.")
+    @Flag(name: .customLong("replace"), help: "Replace the field's current content. Uses Cmd+A on Simulator, 'Select All' in its menu path, and W3C element clear on a physical iPhone.")
     var replace: Bool = false
 
-    @Flag(name: .customLong("via-menu"), help: "Use the iOS edit menu (long-press → tap Paste) instead of Cmd+V. Touch-only path, works with the soft keyboard showing or hardware keyboard disconnected. Requires --target-id or --target-x/y.")
+    @Flag(name: .customLong("via-menu"), help: "iOS Simulator only: use the edit menu (long-press → tap Paste) instead of Cmd+V. Touch-only path, works with the soft keyboard showing or hardware keyboard disconnected. Requires --target-id or --target-x/y.")
     var viaMenu: Bool = false
 
     @Option(name: .customLong("target-id"), help: "For --via-menu: AXUniqueId of the field to long-press. Resolves via the live AX tree.")
@@ -114,6 +115,12 @@ struct Paste: SimUseExecutableCommand {
 
     @OptionGroup var device: DeviceOptions
 
+    @Option(
+        name: .customLong("bundle-id"),
+        help: "Physical Apple device only: attach the WebDriverAgent session to this app and bring it to the foreground, so the paste goes into that app's field instead of the home screen. Ignored on the iOS Simulator and Android."
+    )
+    var bundleId: String?
+
     @OptionGroup var json: JSONOutputOptions
 
     var jsonOutput: Bool { json.enabled }
@@ -124,7 +131,11 @@ struct Paste: SimUseExecutableCommand {
 
     var simulatorUDIDForDaemon: String? { device.resolved }
 
-    var daemonBypass: Bool { useStdin }
+    // tvOS and physical Apple devices bypass so their rejection / Appium
+    // routing happens in-process, not in a freshly spawned daemon.
+    var daemonBypass: Bool {
+        useStdin || PlatformRouter.bypassesSimulatorDaemon(udid: device.resolved)
+    }
 
     func format(_ result: ExecutionResult) -> CommandOutput { .empty }
 
@@ -144,7 +155,7 @@ struct Paste: SimUseExecutableCommand {
         // routing decision as execute() (`.none` falls through to the
         // iOS backend there, so it keeps the probe).
         switch PlatformRouter.resolve(udid: device.resolved) {
-        case .android, .iOSDevice:
+        case .android, .appleDevice, .tvOSSim:
             return
         case .iOSSim, .none:
             await makeIOSSubcommand().clientPreflight()
@@ -155,15 +166,36 @@ struct Paste: SimUseExecutableCommand {
         switch PlatformRouter.resolve(udid: device.resolved) {
         case .android:
             return try executeAndroid()
-        case .iOSDevice:
-            throw TargetCapabilityError.physicalIOS(
-                verb: "paste",
-                reason: "the accessibility audit channel exposes no pasteboard or text-input access.",
-                alternative: "Text input on physical iOS devices is not available yet. If the step only needs an activation, use `sim-use tap '#<id>' / --label`."
-            )
+        case .tvOSSim:
+            throw TVOSCapabilityError(command: "paste")
+        case .appleDevice:
+            return try await executeAppleDevice()
         case .iOSSim, .none:
             return try await executeIOSSim()
         }
+    }
+
+    /// Physical iOS device: seed the device pasteboard and deliver the text
+    /// to the focused field over WebDriverAgent (there is no hardware Cmd+V
+    /// on a device). The `--via-menu` long-press flow is Simulator-only; the
+    /// controller rejects a tvOS device with `TVOSCapabilityError`.
+    private func executeAppleDevice() async throws -> ExecutionResult {
+        if viaMenu {
+            throw CLIError(errorDescription: "--via-menu is not supported on physical devices; paste sends the text to the focused field directly.")
+        }
+        let inputText = try IOSSimPasteCommand.resolveInputText(
+            text: text, useStdin: useStdin, inputFile: inputFile, logger: nil
+        )
+        guard !inputText.isEmpty else {
+            throw CLIError(errorDescription: "Input text is empty; nothing to paste.")
+        }
+        try await AppleDeviceController.live().paste(
+            udid: device.resolved,
+            text: inputText,
+            bundleId: bundleId,
+            replace: replace
+        )
+        return ExecutionResult()
     }
 
     private func executeIOSSim() async throws -> ExecutionResult {

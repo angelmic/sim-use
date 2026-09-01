@@ -48,8 +48,8 @@ enum HIDSendDeadline {
         // (UInt64.max ns ≈ 584 years), not a crash.
         let (nanoseconds, overflow) = milliseconds.multipliedReportingOverflow(by: 1_000_000)
         let race = Race<T>()
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
+        let outcome = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
                 race.start(
                     continuation: continuation,
                     deadlineNanos: overflow ? .max : nanoseconds,
@@ -60,6 +60,19 @@ enum HIDSendDeadline {
         } onCancel: {
             race.cancelFromOutside()
         }
+        return try outcome.result.get()
+    }
+
+    /// Heap-boxes the generic result across the continuation boundary.
+    /// Swift 6.2.4 can otherwise generate non-LIFO task-stack teardown for
+    /// a generic `CheckedContinuation<T, Error>` and abort in
+    /// `swift_task_dealloc` before a fast HID send returns.
+    private final class Outcome<T: Sendable>: @unchecked Sendable {
+        let result: Result<T, Error>
+
+        init(_ result: Result<T, Error>) {
+            self.result = result
+        }
     }
 
     /// First-resume-wins rendezvous between the operation task, the
@@ -67,13 +80,13 @@ enum HIDSendDeadline {
     /// all mutable state is guarded by `lock`.
     private final class Race<T: Sendable>: @unchecked Sendable {
         private let lock = NSLock()
-        private var continuation: CheckedContinuation<T, Error>?
+        private var continuation: CheckedContinuation<Outcome<T>, Never>?
         private var operationTask: Task<Void, Never>?
         private var timerTask: Task<Void, Never>?
         private var cancelledBeforeStart = false
 
         func start(
-            continuation: CheckedContinuation<T, Error>,
+            continuation: CheckedContinuation<Outcome<T>, Never>,
             deadlineNanos: UInt64,
             operation: @escaping @Sendable () async throws -> T,
             makeTimeoutError: @escaping @Sendable () -> Error
@@ -135,7 +148,7 @@ enum HIDSendDeadline {
             guard let continuation else { return }
             operationTask?.cancel()
             timerTask?.cancel()
-            continuation.resume(with: result)
+            continuation.resume(returning: Outcome(result))
         }
 
         func cancelFromOutside() {

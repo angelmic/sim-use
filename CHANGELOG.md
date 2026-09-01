@@ -7,6 +7,153 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A repository-owned `sync-upstream-main` skill gives Claude Code and Codex the
+  same five-gate workflow for rebasing this fork onto `upstream/main`, retaining
+  iOS/tvOS extensions, keeping physical-device values out of git, integrating
+  only after approved hardware E2E, and rebuilding the exact xd-labelled binary.
+
+- **DeviceBackend — physical Apple device support (xd 2.0 Phase 1)**: drive real
+  iPhones/Apple TVs through Appium/WDA with the same CLI verbs as simulators.
+  - `devices` lists physical devices (dash + 40-hex UDIDs) with a `target: sim|device` field.
+  - iOS device verbs: `ui`/`tap`/`swipe`/`type`/`paste`/`screenshot` (`--bundle-id`
+    attaches with activate semantics — navigation survives across per-command sessions).
+  - tvOS device verbs: `tvos ui`/`remote`/`type`/`screenshot` on tvOS 17+; `ui` and `type` fail fast
+    on ≤16.x (WDA a11y crash).
+  - Fail-fast preflight: Appium `/status` (3s) and `devicectl` tunnelState checks with
+    actionable hints; requires a reachable Appium server (`SIM_USE_APPIUM_URL`,
+    silently defaults to `http://127.0.0.1:4723`).
+  - App-agnostic capability defaults (`SIM_USE_WDA_BUNDLE_ID`, `SIM_USE_TVOS_WDA_BUNDLE_ID`,
+    `SIM_USE_XCODE_ORG_ID`); team/app-specific values are never baked into the
+    binary. For iOS, a successful WDA-backed session persists bundle/team/signing
+    inputs per UDID; non-empty environment values remain the highest-priority override.
+  - Optional independent Mac/device WDA ports (`SIM_USE_WDA_LOCAL_PORT` and
+    `SIM_USE_WDA_REMOTE_PORT`) let a task-owned Appium proxy reach a
+    preinstalled WDA on an explicitly different device port; with no remote
+    override, Appium retains its normal local/remote-port coupling.
+  - Physical-device discovery keeps rich `devicectl` metadata while treating a
+    matching live `idevice_id -l` USB attachment as connected. This avoids a
+    false negative when CoreDevice's local-network row remains at `connecting`.
+  - Modern physical Apple devices keep a signed-WDA record and stable
+    DerivedData directory per UDID under `~/.sim-use/<UDID>/`. An exact
+    device/Xcode/WDA-source/signing fingerprint plus a valid, unexpired runner
+    selects Appium's `usePrebuiltWDA` (`test-without-building`) path before
+    session creation; a miss keeps the same DerivedData for one incremental
+    build without first paying Appium's 60-second preinstalled-runner timeout.
+    A rejected prebuilt artifact invalidates only the record and repairs once.
+    A per-UDID cross-process lock prevents concurrent CLIs from building or
+    rewriting the same cache simultaneously. Post-creation UI/remote
+    operations are never retried. Set
+    `SIM_USE_WDA_CACHE=0` to disable the optimization or
+    `SIM_USE_WDA_SOURCE_ROOT` when Appium's WDA sources live outside its
+    standard home.
+  - iOS signing inputs now survive trust-cache invalidation in a separate
+    `~/.sim-use/<UDID>/wda-signing-config.json` (`0600`). The next invocation
+    can repair an expired/rejected runner without repeating inline signing
+    environment variables; existing signing-cache fingerprints migrate
+    automatically. Runtime Appium/WDA ports and source paths remain env-only.
+  - Physical-device E2E runners for iOS and tvOS. Their default mode still
+    SKIPs cleanly on hardware-free hosts, while `--require-device` (used by
+    `make e2e-ios-device` / `make e2e-tvos-device`) makes absence fail and
+    allows no skipped cases. Both prefer CoreDevice and use a live USB
+    attachment as fallback; fixture/WDA/team values load at script runtime
+    from a gitignored local config or explicit environment overrides.
+    Their Mac-side WDA proxies default to isolated ports (`8110` for iOS,
+    `8111` for tvOS; device-side `8100`). With an explicit
+    `SIM_USE_TUNNEL_REGISTRY_PORT`, the tvOS gate validates the target before
+    exercising the retained installed-runner supervisor; without one it uses
+    Appium-managed WDA and the signing cache. Fake-toolchain contract tests pin
+    the strict gate, both connection routes, both WDA strategies, port
+    isolation, and config precedence; committed fixtures contain synthetic
+    identifiers.
+  - `SIM_USE_WDA_STATE_HOME` relocates per-device WDA cache, DerivedData,
+    signing, and supervisor records. Both physical runners default it beneath
+    their evidence root so they cannot overwrite canonical xd state.
+
+- Experimental tvOS Simulator support through Appium/XCUITest: top-level `ui` and `screenshot`, the `sim-use tvos` namespace, and focus-aware `tvos remote <up|down|left|right|select|menu|play-pause|home>`. Each operation owns and closes a short-lived WebDriver session; `--bundle-id` (or `SIM_USE_TVOS_BUNDLE_ID` for top-level verbs) restores the target app after a cold WDA launch, and `SIM_USE_APPIUM_URL` overrides the default `http://127.0.0.1:4723` endpoint. `tvos type <text>` enters whole strings into the focused text field through the focus keyboard (WebDriver element sendKeys — the only string-entry channel tvOS exposes; the tvOS WebDriverAgent has no keyboardInput or W3C key actions).
+- tvOS Playground fixture (`Playgrounds/tvOS`, `com.cameroncooke.SimUsePlaygroundTV`): a root menu with `--launch-arg screen=` deep links to four deterministic screens — a 3x2 focus grid (default focus pinned on Alpha, `Last:` status line, play-pause handler), a focus-behaviors row (a disabled control, an alert), a text-entry field, and a 25-row list. The TVOSRemoteTests E2E suite covers the interactions tvOS actually has: focus movement along the grid contract and select activation, focus stopping at edges and skipping disabled controls, alerts trapping focus, Menu popping back / dismissing the keyboard, Home leaving the app, play-pause reaching the app, the focus keyboard typing a character, `tvos type` entering whole strings (and refusing when focus is not on a text field), long lists scrolling the focused row into view, the shared `ui`/`screenshot`/`app-state` surface, and a parameterized sweep asserting every coordinate/HID verb fails with the focus-navigation hint. Gated by `SIM_USE_E2E=1` + `TVOS_SIMULATOR_UDID`; `make e2e-tvos` (or `scripts/test-runner-tvos.sh [test-name] [--no-build]`) builds/installs the fixture, preflights Appium, and runs the suite. Not part of `make e2e` while tvOS support is experimental.
+
+### Changed
+
+- Re-based the fork onto upstream v0.14.0 as a fresh baseline (net-diff
+  replant). Physical Apple devices keep routing through the fork's
+  WebDriverAgent DeviceBackend on the top-level verbs (`ui`, `tap`, `swipe`,
+  `type`, `paste`, `screenshot`), while upstream's zero-setup accessibility
+  audit channel is adopted unchanged under the `sim-use ios-device`
+  namespace (`devices`, `ui`, `screenshot`, identifier-based `tap`).
+  Upstream's `Device.kind` (`simulator` / `emulator` / `physical`) becomes
+  the stored carrier axis; the fork's `target` (`sim` / `device`) is now
+  derived from it and both keys stay on the `--json` wire.
+
+- `sim-use devices` classifies `simctl` tvOS runtimes separately and accepts `--platform tvos`; `--platform ios` no longer includes tvOS rows.
+- `app-state` reports `"platform": "tvos"` for tvOS Simulators (previously `"ios"`); the underlying process probe is unchanged.
+- `tvos remote` keyboard-mapped buttons (directions, select, menu) press through the simulator HID channel by default — ~0.3 s instead of ~2.5 s per Appium session — and report no focus transition; pass `--report-focus` for the observing Appium path with the before/after pair. play-pause and home have no keyboard binding and always use Appium.
+- `tvos screenshot` without `--bundle-id` captures via `simctl io` (~0.7 s, no Appium); with `--bundle-id` it keeps the Appium path that restores the target app to the foreground first.
+- `tvos remote` waits 0.35 s after the press before sampling the after-focus, so the reported transition reflects where focus actually landed; tune or disable with `--settle-delay`.
+
+### Fixed
+
+- Physical `tvos type` now routes through the selected Apple TV's preflighted
+  WDA session instead of simulator capabilities; the physical runner verifies
+  the entered text from a fresh hierarchy.
+- Physical iOS fail-fast timing assertions now validate numeric elapsed values,
+  preventing Bash quoting errors from turning an empty measurement into a
+  false-green result.
+- The tvOS simulator runner enables pipeline failure propagation so xcodegen or
+  xcodebuild failures cannot be masked by output filtering.
+
+- Physical-device CLI parity no longer silently drops supported flags:
+  physical-iOS `tap` honors pre/post delays and selector polling, `swipe`
+  honors its pre/post delays, and `paste --replace` clears the active W3C
+  element before sending replacement text. Simulator-only multi-touch,
+  interpolation, and coordinate-calibration combinations now fail explicitly
+  on hardware.
+- Physical Apple UDID routing accepts either hex case for modern dash-form and
+  classic 40-hex identifiers, preventing lowercase modern IDs from falling
+  into Android routing.
+- Physical-device E2E screenshot assertions remove the exact prior output
+  before capture, so a reused evidence directory cannot make a failed command
+  appear green.
+- WDA artifact inspection drains child stdout and stderr concurrently, avoiding
+  a pipe-capacity deadlock when `codesign` or `security` emits large diagnostics.
+- The tvOS Simulator E2E fixture now primes a cold WebDriverAgent session
+  before applying its deterministic screen launch argument. Appium's first
+  `autoLaunch` can otherwise reopen the app at its root menu and replace the
+  requested test screen.
+- The remote-content recovery E2E now dismisses Safari's optional first-run
+  feature tip and recognizes Simplified Chinese, Traditional Chinese, and
+  English file-picker labels, so host locale/onboarding state cannot obscure
+  the document-picker behavior under test.
+- Xcode 26.3 / Swift 6.2.4 no longer aborts in `swift_task_dealloc`
+  when a fast HID send wins `HIDSendDeadline`'s generic continuation race.
+  The result now crosses the async boundary in a heap box, preserving the
+  existing first-result, timeout, and cancellation semantics while avoiding
+  the toolchain's non-LIFO async task-stack teardown.
+- Physical-iOS `paste` now uses Appium's device-capable
+  `mobile: setClipboard` command with base64 plaintext before sending keys to
+  the active element. The previous `mobile: setPasteboard` call is
+  Simulator-only and prevented real-device paste from reaching the field.
+- Physical-tvOS commands now fall back to Appium-managed WDA when no
+  `SIM_USE_TUNNEL_REGISTRY_PORT` is configured. The retained installed-runner
+  supervisor still activates when an explicit, reachable registry is supplied,
+  but a missing registry no longer launches a child that can only time out.
+- Physical-iOS touch commands now fail fast if an internal caller tries
+  Appium's legacy `mobile: tap` scripts. Those scripts proxy to WDA
+  `/wda/tap`, which can return success without injecting input; all taps and
+  swipes must use W3C `POST /actions` pointer sequences instead.
+- Modern physical iPhones now recover automatically from a missing, expired,
+  or otherwise unlaunchable WDA. With signing inputs configured, the controller
+  uses the verified per-UDID prebuilt artifact immediately, or performs one
+  incremental build/sign repair when the cache is absent or stale, instead of
+  first waiting for a doomed preinstalled-runner launch timeout. Repair forces
+  a fresh WDA lifecycle so Appium cannot report success by attaching to a
+  still-running runner while leaving an invalid local signature unrepaired.
+- Apple Simulator platform routing reads CoreSimulator's per-device `device.plist` (~1 ms) instead of forking `simctl list devices -j` (hundreds of ms) in every CLI invocation — `ui`, `screenshot`, and `record-video` lose a per-call fork, and long-lived daemons now see simulators created after they spawned. The simctl catalog remains as a safety net for unreadable plists (devices in a custom `--set` are visible to neither source and keep the historical iOS routing), and a fallback failure prints a warning instead of silently routing tvOS devices to the iOS backend.
+- Touch/typing/recording verbs aimed at a tvOS Simulator fail in-process with the focus-navigation hint instead of first auto-spawning a per-UDID daemon that can never serve them.
+- A failed Appium session DELETE no longer fails a tvOS command whose work had already completed; teardown is best-effort with a stderr warning.
+- The tvOS outline no longer drops the focused element when it is unlabeled, or when the WebDriver source emits a duplicate node (same role/label/frame) whose focused copy comes second — duplicates now merge their states.
+- A malformed Appium session id surfaces as a WebDriver-protocol error instead of crashing the CLI on a force-unwrapped URL.
 ## [0.14.0] - 2026-08-27
 
 ### Added

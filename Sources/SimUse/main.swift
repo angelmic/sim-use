@@ -8,6 +8,7 @@ import SimUseCore
 import AndroidBackend
 import iOSSimBackend
 import iOSDeviceBackend
+import TVOSBackend
 
 // MARK: - Main Entry Point
 //
@@ -45,6 +46,17 @@ enum EntryPoint {
         // no-op locally.
         BridgeClient.expectedBridgeVersion = ReleaseVersion.normalize(VERSION)
 
+        // Wire the tvOS backend's HID fast path. TVOSBackend doesn't link
+        // the FB frameworks; the executable does, so the hook goes in here
+        // (same pattern as the daemon's livenessProbe).
+        TVOSHIDBridge.pressKey = { keycode, udid in
+            try await HIDInteractor.performHIDEvent(
+                .shortKeyPress(keycode),
+                for: udid,
+                logger: SimUse.simUseLogger
+            )
+        }
+
         if let typed = CommandLine.arguments.dropFirst().first,
            let canonical = iOSOnlyVerbRedirects[typed] {
             FileHandle.standardError.write(Data("""
@@ -71,7 +83,7 @@ struct SimUse: AsyncParsableCommand {
     static let simUseLogger = SimUseLogger()
 
     static let configuration = CommandConfiguration(
-        abstract: "A utility to interact with iOS Simulators and Android emulators/devices and extract accessibility information.",
+        abstract: "A utility to interact with iOS/tvOS Simulators and Android emulators/devices and extract accessibility information.",
         version: VERSION,
         subcommands: [
             // Cross-platform verbs (top-level routes by UDID shape).
@@ -103,6 +115,7 @@ struct SimUse: AsyncParsableCommand {
             // verbs that work on both platforms.
             IOSSimCommand.self,
             IOSDeviceCommand.self,
+            TVOSCommand.self,
             AndroidCommand.self,
         ]
     )

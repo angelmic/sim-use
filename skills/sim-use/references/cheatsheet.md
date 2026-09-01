@@ -4,15 +4,33 @@
 
 | Namespace | Scope | Examples |
 |---|---|---|
-| `sim-use <verb>` | Cross-platform (iOS + Android) | `ui`, `tap`, `swipe`, `type`, `paste`, `button`, `gesture`, `screenshot`, `record-video`, `stream-video`, `app-state` |
+| `sim-use <verb>` | Shared surface | `ui` and `screenshot` on iOS + tvOS + Android; WDA-backed `ui`/`tap`/`swipe`/`type`/`paste`/`screenshot` on physical iOS; other touch, typing, recording, streaming, and app-state verbs on supported simulator/emulator platforms |
 | `sim-use ios <verb>` | iOS Simulator only | `key`, `key-combo`, `key-sequence`, `batch` |
-| `sim-use android <verb>` | Android device only | `init`, `devices`, `ping` |
+| `sim-use ios-device <verb>` | Physical iOS accessibility audit | `devices`, `ui`, identifier/label-based `tap`, `screenshot` |
+| `sim-use tvos <verb>` | tvOS Simulator or physical Apple TV | `remote`, `type`, plus namespaced `ui` and `screenshot` |
+| `sim-use android <verb>` | Android device only | `init`, `devices`, `ping`, `scroll` |
 
 ## Device resolution
 
 `--device` is optional. Resolution order: `--device` flag → `$SIM_USE_DEVICE` env → only live daemon → only booted simulator.
 
 When multiple devices exist, pass `--device <UDID>` explicitly. Run `sim-use devices` to list all connected devices across platforms.
+
+## tvOS focus and remote
+
+```bash
+sim-use tvos ui --device <TV_UDID> --bundle-id <id>                 # find `focused`
+sim-use tvos remote down --device <TV_UDID> --bundle-id <id>        # move focus
+sim-use tvos remote select --device <TV_UDID> --bundle-id <id>      # activate
+sim-use tvos remote menu --device <TV_UDID> --bundle-id <id>        # back
+sim-use tvos type 'query' --device <TV_UDID> --bundle-id <id>       # into focused text field
+```
+
+Buttons: `up`, `down`, `left`, `right`, `select`, `menu`, `play-pause`, `home`. On Simulator, directions/select/menu press through a ~0.3 s HID fast path and report nothing — verify with `ui` after, or pass `--report-focus` to get the before/after focus pair (one Appium session, ~2.5 s). tvOS navigation is focus-driven; coordinate touch verbs such as `tap`, `swipe`, and `touch` intentionally fail with a tvOS-specific hint. `remote` waits 0.35 s after an observing Appium press before reporting the focus transition; tune or disable with `--settle-delay`.
+
+`type` enters a whole string into the focused text field (select opens the keyboard, the string lands over the WebDriver element surface, menu commits). It needs focus on a `TextField` first. Physical Apple TV typing uses the device WDA path and requires tvOS 17 or newer.
+
+`--bundle-id` is recommended whenever the target is known: Appium then restores it after a cold WDA launch. Top-level `ui` / `screenshot` read the same target from `SIM_USE_TVOS_BUNDLE_ID`.
 
 ## Selectors
 
@@ -166,7 +184,7 @@ sim-use daemon stop --all
 SIM_USE_NO_DAEMON=1 sim-use ui     # bypass daemon for one call
 ```
 
-Daemon is iOS-only (auto-spawned, 600s idle TTL). Android commands go through adb directly.
+Daemon is iOS-only (auto-spawned, 600s idle TTL). tvOS commands use short-lived Appium sessions; Android commands go through adb directly.
 
 ## iOS keyboard (HID keycodes)
 

@@ -69,6 +69,11 @@ struct KeyboardState: SimUseExecutableCommand {
 
     var simulatorUDIDForDaemon: String? { device.resolved }
 
+    /// tvOS never serves this verb (`execute()` throws
+    /// `TVOSCapabilityError`), so reject in-process instead of spawning a
+    /// per-UDID daemon for a device the daemon cannot drive.
+    var daemonBypass: Bool { PlatformRouter.bypassesSimulatorDaemon(udid: device.resolved) }
+
     func execute() async throws -> ExecutionResult {
         switch PlatformRouter.resolve(udid: device.resolved) {
         case .android:
@@ -78,12 +83,10 @@ struct KeyboardState: SimUseExecutableCommand {
                 visible: state.visible,
                 imePackage: state.imePackage
             )
-        case .iOSDevice:
-            throw TargetCapabilityError.physicalIOS(
-                verb: "keyboard-state",
-                reason: "the accessibility audit channel does not report keyboard visibility.",
-                alternative: "Re-run `sim-use ui` and inspect the outline for the state change you expect instead."
-            )
+        case .tvOSSim:
+            throw TVOSCapabilityError(command: "keyboard-state")
+        case .appleDevice:
+            throw DeviceBackendUnsupportedError(command: "keyboard-state", deviceId: device.resolved)
         case .iOSSim, .none:
             let sub = makeIOSSubcommand()
             return try await sub.execute()

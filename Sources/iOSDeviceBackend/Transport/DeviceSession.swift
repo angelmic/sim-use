@@ -131,13 +131,17 @@ public enum DeviceSession {
         /// The cross-platform `sim-use devices` row for this device.
         /// `udid` may be an ECID when AMDevice hasn't published the
         /// lockdown UDID yet (see `FBDevice.identity`) — surfaced as-is.
+        /// FBDevice reports an attached, reachable device as `Booted`;
+        /// the unified physical vocabulary (shared with the devicectl /
+        /// idevice_id lister) calls that `connected`, which is also what
+        /// `Device.isUsable` keys off for physical rows.
         public var unifiedDevice: Device {
             Device(
                 udid: udid,
                 name: name,
                 platform: .ios,
                 kind: .physical,
-                state: state,
+                state: state == "Booted" ? Device.State.deviceConnected : state,
                 runtime: osVersion
             )
         }

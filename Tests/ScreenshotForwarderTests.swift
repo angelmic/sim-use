@@ -49,6 +49,16 @@ struct ScreenshotForwarderTests {
         #expect(subCmd.daemonBypass)
     }
 
+    @Test("Physical Apple-device screenshot forwards the target bundle")
+    func physicalDeviceForwardsTargetBundle() throws {
+        let topLevel = try Screenshot.parse([
+            "--device", "00008110-001234567890001E",
+            "--bundle-id", "com.example.App",
+        ])
+
+        #expect(topLevel.appleDeviceBundleId == "com.example.App")
+    }
+
     // MARK: - Output path resolution
 
     @Test("Default iOS output filename embeds the simulator name")

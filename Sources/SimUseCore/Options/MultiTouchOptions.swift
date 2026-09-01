@@ -19,7 +19,7 @@ import ArgumentParser
 public struct MultiTouchOptions: ParsableArguments {
     @Option(
         name: .customLong("fingers"),
-        help: "Number of fingers in the gesture. Defaults to 1 (single-touch). Pass 2 to dispatch a two-finger tap / long-press via the multi-touch HID primitive (iOS) or a two-stroke `/gesture` (Android)."
+        help: "Number of fingers in the gesture. Defaults to 1 (single-touch). Pass 2 to dispatch a two-finger tap / long-press via the multi-touch HID primitive (iOS Simulator) or a two-stroke `/gesture` (Android). Physical Apple devices currently support one finger."
     )
     public var fingers: Int = 1
 

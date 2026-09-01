@@ -3,7 +3,7 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Tests](https://github.com/lycorp-jp/sim-use/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/lycorp-jp/sim-use/actions/workflows/tests.yml)
 
-Give AI agents the ability to observe and act on iOS Simulator and Android emulator / device screens.
+Give AI agents the ability to observe and act on iOS Simulator, tvOS Simulator, and Android emulator / device screens.
 
 **Observe** — turn any screen into a token-efficient outline an LLM can reason about:
 
@@ -24,7 +24,7 @@ App: Settings  402x874
   @43 TabBar
 ```
 
-**Act** — tap any element by its alias, no coordinates needed:
+**Act** — on touch platforms, tap any element by its alias, no coordinates needed:
 
 ```text
 $ sim-use tap @9
@@ -33,7 +33,7 @@ $ sim-use tap @9
 
 Plan, code, **verify**, ship — teach this CLI to your agent and close the last gap in the agentic mobile development loop. Let agents verify what they built so you can focus on what matters.
 
-`sim-use` is a cross-platform CLI that drives Apple's Accessibility APIs, the iOS Simulator HID pipeline, and Android's AccessibilityService through a single command surface. It emits a compact, agent-friendly screen description (`ui`) and an alias-cached tap shortcut (`tap @N`) so an LLM loop can observe → act in a few hundred milliseconds per round trip.
+`sim-use` is a cross-platform CLI that drives Apple's Accessibility APIs, the iOS Simulator HID pipeline, tvOS focus navigation through Appium/XCUITest, and Android's AccessibilityService through a single command surface. It emits a compact, agent-friendly screen description (`ui`) and gives each platform a native action surface: alias-cached taps (`tap @N`) on touch screens, remote-button focus movement on tvOS.
 
 
 - [The observe → act loop](#the-observe--act-loop)
@@ -71,6 +71,8 @@ AX-derived selectors work in any orientation — sim-use self-calibrates the
 current rotation on each command (iOS). Explicit `-x/-y`/`--point` is
 interpreted in the device-native portrait space.
 
+On tvOS, the same loop uses focus instead of coordinates: read the entry marked `focused`, then issue `sim-use tvos remote <direction|select|menu>`.
+
 
 ## Why sim-use
 
@@ -78,7 +80,7 @@ interpreted in the device-native portrait space.
 - **Nothing hidden.** sim-use walks the full accessibility tree including WebViews, system overlays, and embedded content — no elements are silently skipped. When the frontmost app exposes an empty tree because a remote process owns the visible UI (a system document picker, for example), `ui` automatically retries with cross-process discovery and flags the recovered, flat hierarchy via the `advisory` envelope key.
 - **AI-native.** Designed from day one for agent loops, not human testers. Alias-cached taps (`@N`), structured `--json` envelopes with actionable `hint` fields on errors, and a bundled agent skill (`sim-use init --client claude`) that teaches your AI client the full command surface.
 - **Fast.** A per-device background daemon amortises init cost across calls. After the first command, each observe-act round trip completes in ~300 ms.
-- **Cross-platform.** One command surface drives both iOS Simulator and Android emulator/device. Same verbs, same flags, same `--json` shape — write one agent loop that works on both.
+- **Cross-platform.** One command surface drives iOS Simulator, tvOS Simulator, and Android emulator/device. `ui`, `screenshot`, and the `--json` envelope are shared; touch platforms keep selectors and gestures, while tvOS exposes its native focus/remote model.
 
 
 ## Install
@@ -108,7 +110,11 @@ make build
 .build/debug/sim-use --help
 
 # Other Makefile targets
-make test    # run tests
+make test             # unit tests; no device required
+make e2e-ios          # iOS Simulator
+make e2e-tvos         # tvOS Simulator
+make e2e-ios-device   # strict physical iOS gate; explicit env below
+make e2e-tvos-device  # strict physical tvOS gate; explicit env below
 make clean
 ```
 
@@ -139,25 +145,145 @@ sim-use init --uninstall --client claude
 
 ## Platforms
 
-sim-use drives both **iOS Simulators** and **Android devices / emulators** through the same command surface. The device ID shape decides which backend handles the call:
+sim-use drives **iOS Simulators**, **tvOS Simulators**, and **Android devices / emulators** through the same command surface. Android serials are recognised by shape; Apple Simulator UUIDs are resolved against their installed runtime:
 
-  * `1A2B3C4D-...` (UUID) → iOS Simulator
+  * `1A2B3C4D-...` (UUID) → iOS or tvOS Simulator, resolved through `simctl`
   * `emulator-5554` / `R5CT1ABCD12` / `192.168.1.5:5555` → Android device
   * `00008130-...` (8-16 hex) / 40-hex → physical iPhone/iPad (restricted verb set)
 
 For Android, run `sim-use android init --device <serial>` once to install the bridge APK. See `AGENTS.md` for Android toolchain setup.
 
-**Physical iPhones and iPads** (experimental) route through the same top-level verbs — `sim-use ui`, `sim-use tap '#<id>' / --label` and `sim-use screenshot` work against a plugged-in device's UDID. The channel exposes no element geometry, so it trades coordinate taps, swipes and gestures for accessibility actions, and the remaining verbs reject with the reason and the nearest alternative — never assume capability parity; see the [capability matrix](#physical-ios-devices). sim-use installs and signs no runner and needs no Developer Disk Image; `ui`/`tap` need the foreground app to be development-signed (`get-task-allow=true`), `screenshot` captures any screen.
+**Physical iPhones, iPads and Apple TVs** route through the same top-level verbs over WebDriverAgent — `sim-use ui`, `tap`, `swipe`, `type`, `paste` and `screenshot` work against a plugged-in device's UDID (the remaining verbs reject with the reason and the nearest alternative). This full-interaction path needs a reachable Appium server and WDA signing inputs (below). Alternatively, the `sim-use ios-device` namespace offers a zero-setup accessibility-audit path — `devices`, `ui`, `screenshot` and identifier-based `tap` with no Appium server, no signed runner and no Developer Disk Image; `ui`/`tap` need the foreground app to be development-signed (`get-task-allow=true`), `screenshot` captures any screen over CoreDevice.
+
+Physical iPhones on iOS 17 or newer keep a verified signed WDA artifact and
+its repair inputs per device. Provide the signing inputs on the first
+successful WDA-backed command (or whenever you intentionally change them):
+
+```bash
+export SIM_USE_WDA_BUNDLE_ID=com.example.WebDriverAgentRunner
+export SIM_USE_XCODE_ORG_ID=ABCDE12345
+# Optional; defaults to Apple Development:
+export SIM_USE_XCODE_SIGNING_ID="Apple Development"
+```
+
+After Appium creates the session, sim-use stores the three signing inputs in
+`~/.sim-use/<UDID>/wda-signing-config.json` with mode `0600`. Later commands
+restore them automatically, so routine cold/warm launches no longer need
+those exports. Non-empty environment values always override the persisted
+record and replace it after the next successful session. Appium URLs, WDA
+proxy ports, WDA source roots, and `SIM_USE_WDA_CACHE` remain process-scoped
+and are never persisted.
+
+`wda-signing-cache.json` records the exact device/Xcode/WDA/signing
+fingerprint, artifact signing time, profile expiry, and last successful
+launch. A valid record goes directly to Appium's `test-without-building`
+path; a missing, stale, or expired record goes directly to one incremental
+build/sign attempt under `~/.sim-use/<UDID>/wda-derived-data`. The repair
+session sets `appium:useNewWDA=true`, forcing XCUITest to stop/uninstall any
+still-running runner before xcodebuild; otherwise Appium could reuse that
+process and leave an invalid local signature untouched. This also avoids a
+doomed 60-second preinstalled-runner timeout. Independent sim-use processes
+serialize this transition through `wda-repair.lock`, so they cannot build the
+same per-device DerivedData concurrently. A legacy `wda-signing-cache.json`
+can seed the new signing config on its first reuse. With
+`SIM_USE_WDA_CACHE=0`, persisted signing inputs are ignored and sim-use
+retains the original installed-WDA behavior.
+
+Set `SIM_USE_WDA_STATE_HOME` to relocate the `.sim-use/<UDID>` WDA cache,
+DerivedData, signing record, and tvOS supervisor record for one process. The
+physical E2E runners set it to a task-owned directory under their evidence
+root, so validation cannot overwrite a long-lived xd installation's state.
+
+Physical-iOS taps and swipes use W3C `POST /session/<id>/actions` pointer
+sequences exclusively. sim-use rejects `mobile: tap` and
+`mobile: tapWithNumberOfTaps` before transport because XCUITest maps those
+scripts to WDA's legacy `/wda/tap` route, which can acknowledge a request
+without delivering an input event. Treat an HTTP 200 as transport evidence
+only; verify the resulting screen state after every action.
+
+tvOS support is experimental and uses Appium's XCUITest driver. Start Appium before the first tvOS command (the default endpoint is `http://127.0.0.1:4723`):
+
+```bash
+npm install -g appium
+appium driver install xcuitest
+appium --port 4723
+
+# Optional when Appium runs elsewhere:
+export SIM_USE_APPIUM_URL=http://127.0.0.1:4725
+
+# Optional target for top-level `ui` / `screenshot`:
+export SIM_USE_TVOS_BUNDLE_ID=com.example.TVApp
+```
+
+For a physical Apple TV on tvOS 17 or newer, set `SIM_USE_TVOS_WDA_BUNDLE_ID` to the correctly signed WDA product id (without `.xctrunner`). When `SIM_USE_TUNNEL_REGISTRY_PORT` points to a live RemoteXPC registry and a target bundle id is present, sim-use starts the installed runner through XCTest/testmanagerd, keeps one health-checked supervisor per UDID, and gives Appium an attach-only URL. Without that explicit registry, it falls back to Appium-managed WDA and the signing cache. Supervisor state and timestamps live in `~/.sim-use/<UDID>/tvos-wda-supervisor.json`; set `SIM_USE_TVOS_WDA_SUPERVISOR=0` to force the fallback even when a registry is configured.
+
+### Physical-device E2E gates
+
+The repository's physical runners contain no account, bundle, or device
+defaults. Copy the committed placeholder file to the gitignored local runtime
+configuration, fill in the values, then use the strict Make targets:
+
+```bash
+cp .sim-use-e2e.local.env.example .sim-use-e2e.local.env
+# Edit .sim-use-e2e.local.env with the real device/signing values.
+
+make e2e-ios-device
+make e2e-tvos-device
+```
+
+The tvOS target works without administrator access through Appium-managed WDA.
+To exercise the retained installed-runner supervisor instead, keep a registry
+alive in one terminal:
+
+```bash
+bash -c '
+  source scripts/load-physical-device-e2e-config.sh
+  sim_use_load_physical_device_e2e_config "$PWD"
+  exec sudo appium driver run xcuitest tunnel-creation \
+    --appletv-device-id "$SIM_USE_TVOS_DEVICE_UDID" \
+    --tunnel-registry-port 42314
+'
+```
+
+Then opt the gate into that registry from another terminal:
+
+```bash
+SIM_USE_TUNNEL_REGISTRY_PORT=42314 make e2e-tvos-device
+```
+
+The runners parse this file at script runtime as strict `KEY=value` data; they
+do not execute it as shell code. Set `SIM_USE_E2E_CONFIG_FILE` to use another
+path. A non-empty environment variable of the same name overrides the local
+file for one-off runs.
+
+Both runners prefer a live CoreDevice tunnel and fall back to a live
+`idevice_id -l` USB route. Their `--require-device` mode turns missing
+hardware into a failure and permits no skipped test cases. A reachable
+`SIM_USE_APPIUM_URL` is reused; otherwise the runner starts and later stops
+only its own Appium process. The tvOS runner first repairs/installs the signed
+WDA runner through the xcodebuild path. With an explicit
+`SIM_USE_TUNNEL_REGISTRY_PORT`, subsequent cases verify the retained
+supervisor and fail fast if the target is absent from that registry. Without
+the override, they verify the Appium-managed WDA/cache fallback instead. To
+avoid colliding with a long-lived local WDA proxy, the iOS and tvOS runners
+default their Mac-side WDA ports to `8110` and `8111`, respectively, while
+both devices keep WDA on `8100`. Override these with
+`SIM_USE_WDA_LOCAL_PORT` / `SIM_USE_WDA_REMOTE_PORT` when needed. Real
+identifiers remain in the ignored runtime configuration; the committed
+example and contract-test fixture contain synthetic values.
+Each runner also isolates `SIM_USE_WDA_STATE_HOME` under its evidence
+directory; an explicit environment value can choose another task-owned root.
 
 
 ## Commands
 
-All device-scoped commands accept `--device <ID>` (optional when only one simulator is booted). Three command layers:
+All device-scoped commands accept `--device <ID>` (optional when only one simulator is booted). Five command layers:
 
-  * **Top-level** — cross-platform verbs: `ui`, `tap`, `long-press`, `swipe`, `touch`, `multi-touch`, `type`, `paste`, `button`, `gesture`, `keyboard-state`, `screenshot`, `record-video`, `stream-video`, `app-state`. Same flags on iOS and Android; physical iOS devices route through `ui`, `tap` and `screenshot` only (the rest reject with the reason — see the [capability matrix](#physical-ios-devices)).
+  * **Top-level** — shared verbs. `ui` and `screenshot` support iOS, tvOS, Android and physical Apple devices; touch and typing verbs support iOS, Android and physical iOS devices over WDA; recording, streaming, and app-state verbs support iOS and Android and fail fast elsewhere with a target-specific hint.
   * **`sim-use ios <verb>`** — iOS-Simulator-only: `key`, `key-combo`, `key-sequence`, `batch`.
+  * **`sim-use ios-device <verb>`** — physical-only peer namespace (accessibility-audit channel): `devices`, `ui`, `screenshot`, identifier-based `tap`; accepts ECID addressing.
+  * **`sim-use tvos <verb>`** — tvOS-only: `remote` and `type`; `ui` and `screenshot` are also exposed here for symmetry.
   * **`sim-use android <verb>`** — Android-only: `init`, `devices`, `ping`, `scroll`.
-  * **`sim-use ios-device <verb>`** — physical-iOS-only: `devices`, `ui`, `screenshot`, `tap` (experimental). Peer of `ios`/`android`; also accepts ECIDs and the hierarchy tuning flags the top level doesn't carry.
 
 Run `sim-use --help` or `sim-use <command> --help` for the full flag set.
 
@@ -170,7 +296,7 @@ sim-use devices
 UDID="B34FF305-5EA8-412B-943F-1D0371CA17FF"
 ```
 
-One listing covers every target: iOS Simulators (`simctl`), Android devices and emulators (`adb`), and USB-attached physical iPhones/iPads (`FBDeviceControl`). `KIND` — `simulator` / `emulator` / `physical` — is orthogonal to `PLATFORM` and also appears as `kind` in `--json`; capabilities follow the kind (see [Physical iOS devices](#physical-ios-devices) for what physical iOS supports). `--no-physical-ios` skips the FBDeviceControl side entirely (~1 s saved when no device is attached) — the Viewer passes it, since it drives coordinate taps and video streaming, neither of which physical iOS supports.
+One listing covers every target: Apple Simulators (`simctl`), Android devices and emulators (`adb`), and physical Apple devices (`devicectl` enriched by live `idevice_id` USB attachment state). `KIND` — `simulator` / `emulator` / `physical` — is orthogonal to `PLATFORM` and also appears as `kind` in `--json`; capabilities follow the kind (see [Physical iOS devices](#physical-ios-devices) for the two physical-iOS channels). `--no-physical-ios` skips physical Apple-device discovery entirely — the Viewer passes it because its coordinate/video surface does not target hardware.
 
 ### Touch & gestures
 
@@ -196,7 +322,31 @@ sim-use gesture scroll-down --pre-delay 0.5 --post-delay 1.0 --device $UDID
 
 `--pre-delay` / `--post-delay` / `--duration` work on `tap`, `swipe`, and `gesture` alike for coarse timing control.
 
-Single-finger presets (`scroll-*`, `swipe-from-*-edge`) name **visual** directions and are orientation-aware on iOS: their canvas size and rotation are auto-detected per command, so `scroll-up` scrolls the on-screen content up whether the device is portrait, landscape, or upside-down. Explicit `swipe`/`touch` coordinates remain device-native portrait space by default; pass `--coordinate-space ui` to give them in the visual space `ui` prints instead (orientation-calibrated per command; `touch` supports this in the atomic `--down --up` form only). Pinch/rotate presets remain untransformed. On Android the flag is accepted and ignored — display coordinates already rotate with the UI.
+Physical-iOS `tap` also honors selector polling (`--wait-timeout` /
+`--poll-interval`) and both action delays. Physical-iOS `swipe` honors the
+delays and duration. Simulator-only interpolation/orientation options
+(`--delta`, `--coordinate-space ui`) and two-finger taps fail explicitly on a
+physical device instead of being silently ignored.
+
+Single-finger presets (`scroll-*`, `swipe-from-*-edge`) name **visual** directions and are orientation-aware on iOS Simulator: their canvas size and rotation are auto-detected per command, so `scroll-up` scrolls the on-screen content up whether the simulator is portrait, landscape, or upside-down. Explicit Simulator `swipe`/`touch` coordinates remain device-native portrait space by default; pass `--coordinate-space ui` to give them in the visual space `ui` prints instead (orientation-calibrated per command; `touch` supports this in the atomic `--down --up` form only). Physical iOS WDA accepts display-space coordinates directly. Pinch/rotate presets remain untransformed. On Android the flag is accepted and ignored — display coordinates already rotate with the UI.
+
+### tvOS focus navigation
+
+tvOS is focus-driven rather than coordinate-driven. Observe the element carrying the `focused` state, press a Siri Remote direction or button, then observe again:
+
+```bash
+TV_UDID="8737CB71-6462-41EC-B13E-E7C5E8F033E9"
+TV_BUNDLE_ID="com.example.TVApp"
+sim-use tvos ui --device $TV_UDID --bundle-id $TV_BUNDLE_ID
+sim-use tvos remote down --device $TV_UDID --bundle-id $TV_BUNDLE_ID
+sim-use tvos remote select --device $TV_UDID --bundle-id $TV_BUNDLE_ID
+sim-use tvos remote menu --device $TV_UDID --bundle-id $TV_BUNDLE_ID
+sim-use tvos type 'search text' --device $TV_UDID --bundle-id $TV_BUNDLE_ID
+```
+
+Available buttons: `up`, `down`, `left`, `right`, `select`, `menu`, `play-pause`, and `home`. The default fast result only confirms the press; pass `--report-focus` to observe the focused element before and after the action (`--json` returns both entries structurally). Coordinate touch verbs are intentionally unsupported on tvOS.
+
+Pass `--bundle-id` to a namespaced tvOS command when the target app is known. A cold WebDriverAgent launch can briefly take the foreground; the bundle id makes Appium restore the intended app before the command reads source or sends a remote button. Without it, sim-use attaches to whichever app is foreground. Top-level `ui` and `screenshot` use `SIM_USE_TVOS_BUNDLE_ID` for the same purpose.
 
 ### Text input
 
@@ -212,13 +362,19 @@ sim-use type --file input.txt --device $UDID
 
 ```bash
 sim-use paste 'ABC 日本語 🎉' --device $UDID             # at caret
-sim-use paste 'new content' --replace --device $UDID   # Cmd+A + paste
+sim-use paste 'new content' --replace --device $UDID   # replace current field content
 
 printf '%s' "$CONTENT" | sim-use paste --stdin --device $UDID
 sim-use paste --file body.txt --device $UDID
 ```
 
-The default Cmd+V path needs a connected hardware keyboard on the simulator (Simulator.app: I/O > Keyboard > Connect Hardware Keyboard = ON). Under soft-keyboard-only mode HID Cmd+V is dropped — switch to `--via-menu`, which long-presses the target and taps the iOS edit-menu "Paste" button:
+On a physical iPhone, the same verb seeds WDA's device clipboard and sends
+text to the active element; `--replace` clears that element through the W3C
+endpoint first. The Simulator default Cmd+V path needs a connected hardware
+keyboard (Simulator.app: I/O > Keyboard > Connect Hardware Keyboard = ON).
+Under soft-keyboard-only mode HID Cmd+V is dropped — switch to `--via-menu`,
+which is Simulator-only and long-presses the target before tapping the iOS
+edit-menu "Paste" button:
 
 ```bash
 sim-use paste 'ABC 日本語' --via-menu --target-id chatTextField --device $UDID
@@ -307,7 +463,7 @@ The output path goes to stdout; progress messages go to stderr.
 ### Video streaming & recording
 
 ```bash
-# MJPEG stream (cross-platform)
+# MJPEG stream (iOS + Android; not tvOS)
 sim-use stream-video --device $UDID --fps 10 --format mjpeg > stream.mjpeg
 
 # Pipe into ffmpeg
@@ -319,7 +475,7 @@ sim-use stream-video --device $UDID --fps 30 --format ffmpeg | \
 sim-use stream-video --device emulator-5554 --format h264 | \
   ffplay -f h264 -probesize 32 -fflags nobuffer -
 
-# Record MP4 directly (cross-platform)
+# Record MP4 directly (iOS + Android; not tvOS)
 sim-use record-video --device $UDID --output recording.mp4            # 30 fps default
 sim-use record-video --device $UDID --fps 60 --output smooth.mp4      # up to 60 fps
 sim-use record-video --device $UDID --quality 60 --scale 0.5 --output low-bw.mp4
@@ -391,85 +547,68 @@ sim-use daemon stop --all
 SIM_USE_NO_DAEMON=1 sim-use ui --device $UDID
 ```
 
-Daemons self-exit after 600 s of idle and log to `/tmp/sim-use-<uid>/<UDID>.log`. Streaming commands (`screenshot`, `record-video`, `stream-video`) always run in-process regardless.
+Daemons self-exit after 600 s of idle and log to `/tmp/sim-use-<uid>/<UDID>.log`. Streaming commands (`screenshot`, `record-video`, `stream-video`) always run in-process regardless. tvOS commands also stay in-process because each operation owns a short-lived Appium session. On modern physical Apple TV, an explicitly configured tunnel registry enables the per-UDID XCTest/WDA supervisor, which remains healthy for reuse (seven days by default); otherwise Appium manages WDA for each command and reuses the signing cache.
 
 
 ## Physical iOS devices
 
-> **Experimental:** this surface intentionally supports development-signed target apps only. Its commands and compatibility may change while the device matrix grows.
+Physical iPhone/iPad support has two deliberately separate channels:
 
-A connected iPhone or iPad is driven through its accessibility audit daemon over usbmux lockdown. sim-use installs no XCUITest runner, performs no signing and needs no Developer Disk Image. The foreground target app must already be signed with a Development provisioning profile whose final code-sign entitlements contain `get-task-allow=true`, and the device must be paired, trusted, unlocked and in Developer Mode. A Release-configuration build remains supported when installed with a Development profile.
+  * **Top-level WDA channel** — `ui`, `tap`, `swipe`, `type`, `paste`, and `screenshot` route a physical UDID through Appium/WebDriverAgent. This is the full interaction path and needs a reachable Appium server plus WDA signing inputs on first setup.
+  * **`sim-use ios-device` audit channel** — `devices`, `ui`, identifier/label `tap`, and `screenshot`. It needs no Appium server or XCUITest runner and additionally accepts ECIDs, but its hierarchy/action surface is limited to development-signed foreground apps.
 
-Distribution/Ad Hoc, TestFlight, App Store and system apps do not expose the hierarchy or actions required by this channel. `ui` and `tap` fail with an entitlement-oriented diagnostic instead of reporting an empty tree or a successful action.
+Use the top-level channel for ordinary observe → act → verify loops:
 
-Verify the app before installing it when in doubt:
+```bash
+UDID="<physical-iphone-udid>"
+sim-use ui --device "$UDID" --bundle-id com.example.MyApp
+sim-use tap --label "Friends" --device "$UDID" --bundle-id com.example.MyApp
+sim-use swipe --from 220,750 --to 220,250 --device "$UDID" --bundle-id com.example.MyApp
+sim-use type 'hello' --device "$UDID" --bundle-id com.example.MyApp
+sim-use paste 'こんにちは' --replace --device "$UDID" --bundle-id com.example.MyApp
+sim-use screenshot --device "$UDID" --bundle-id com.example.MyApp
+```
+
+The WDA channel accepts display-space coordinates and the documented selector flags. Simulator-only interpolation/orientation and multi-touch combinations fail explicitly instead of being ignored. `SIM_USE_WDA_BUNDLE_ID` and `SIM_USE_XCODE_ORG_ID` seed the first signed WDA build; successful setup persists the reusable signing/cache records under `~/.sim-use/<UDID>/`.
+
+### Accessibility-audit alternative
+
+> **Experimental:** this channel intentionally supports development-signed target apps only. Its commands and compatibility may change while the device matrix grows.
+
+The `sim-use ios-device` namespace talks to Apple's accessibility audit daemon over usbmux lockdown. sim-use installs no XCUITest runner, performs no signing and needs no Developer Disk Image. The foreground target app must already be signed with a Development provisioning profile whose final code-sign entitlements contain `get-task-allow=true`, and the device must be paired, trusted, unlocked and in Developer Mode. Distribution/Ad Hoc, TestFlight, App Store and system apps do not expose hierarchy/actions through this channel; `ui` and `tap` return an entitlement-oriented diagnostic.
 
 ```bash
 codesign -d --entitlements :- /path/to/MyApp.app
 # ... <key>get-task-allow</key><true/> ...
+
+sim-use ios-device ui --device "$UDID"
+sim-use ios-device tap '#BackButton' --device "$UDID"
+sim-use ios-device screenshot --device "$UDID"
 ```
 
-The top-level verbs route a physical UDID automatically — the same observe → act → verify loop as every other target:
-
-```bash
-sim-use devices                      # physical devices appear with kind `physical`
-# ios  physical  Booted  My iPhone  00008140-000210603A40801C  iOS 27.0
-UDID="00008140-000210603A40801C"
-
-sim-use ui --device $UDID
-# Button  "Chats Button, Selected"
-# Button  "Friends"
-# Button  "Settings"  #settingsButton
-# ...
-# 117 elements (316 nodes) in 6647 ms
-
-sim-use tap --label "Friends" --element-type Button --device $UDID
-# Sent Activate to 'Friends' [Button]
-
-# Dynamic labels can use the regular substring selector vocabulary.
-sim-use tap --label-contains "Reply" --element-type Button --device $UDID
-
-# Or target the stable accessibility identifier shown as #id.
-sim-use tap '#BackButton' --device $UDID
-
-# Screenshot — any screen, not limited to development-signed apps. Prints the
-# absolute saved path on stdout (plus a confirmation on stderr).
-sim-use screenshot --device $UDID
-# /Users/me/Device Screenshot - My iPhone - 2026-08-27 at 09.34.10.png
-
-# --json everywhere, shared {ok, data} envelope.
-sim-use tap '#BackButton' --json --device $UDID
-# {"ok":true,"data":{"action":"Activate","identifier":"BackButton","kind":"physical","label":"sim-use Playground","role":"Button"}}
-```
-
-The `sim-use ios-device` namespace remains as the physical-only peer of `ios`/`android` — same three verbs plus `devices`, and additionally accepts ECIDs (shape-based routing can't recognise a bare ECID) and hierarchy tuning flags (`--fast`, `--concurrency`, `--connections`).
+The namespace additionally accepts ECIDs (shape-based top-level routing cannot recognise a bare ECID) and hierarchy tuning flags (`--fast`, `--concurrency`, `--connections`). Its screenshot uses CoreDevice and therefore can capture any screen even though `ui`/`tap` remain entitlement-limited.
 
 A device is addressed by UDID or ECID, and `--device` is optional only when exactly one is attached (top-level auto-resolution still picks booted simulators only). A freshly attached device may be listed by ECID until a session has opened (AMDevice publishes the lockdown UDID lazily). Run `ui` again after every action: accessibility actions are fire-and-forget, so the follow-up read is the authoritative verification.
 
 ### Capability matrix
 
-**Never assume capability parity with the simulator.** Only three verbs route; everything else fails with the reason and the nearest alternative (as a `hint` in `--json`):
-
-| Verb | Simulator | Android | Physical iOS |
-|---|---|---|---|
-| `ui` / `describe-ui` | ✅ | ✅ | ✅ outline + `#id`s only — no `@N` aliases, frames, or `--point` |
-| `tap` | ✅ | ✅ | ✅ `#<id>` / `--id` / `--label` / `--label-contains` / `--element-type` only |
-| `screenshot` | ✅ | ✅ | ✅ any screen (CoreDevice) |
-| `swipe`, `gesture`, `touch`, `multi-touch`, `long-press` | ✅ | ✅ | ❌ no coordinate input or geometry |
-| `tap -x/-y/--point`, `@N` / `#N` aliases, `--value`, `--label-regex`, `--frame`, `--duration`, `--wait-timeout` | ✅ | ✅ | ❌ rejected per form |
-| `type`, `paste` | ✅ | ✅ | ❌ no text-input channel yet |
-| `button`, `keyboard-state` | ✅ | ✅ | ❌ |
-| `record-video`, `stream-video` | ✅ | ✅ | ❌ use `screenshot` |
-| `ios key` / `key-combo` / `key-sequence` / `batch` | ✅ | ❌ | ❌ |
-| `app-state` | ✅ | ✅ | ❌ |
+| Verb | Top-level physical iOS (WDA) | `ios-device` audit |
+|---|---|---|
+| `ui` / `describe-ui` | ✅ structured WDA outline | ✅ audit outline + stable `#id`; no frames/`@N` |
+| `tap` | ✅ selectors or display-space coordinates | ✅ identifier/label selectors only |
+| `swipe` | ✅ W3C pointer action | ❌ no geometry/input channel |
+| `type`, `paste` | ✅ focused WDA element | ❌ no text-input channel |
+| `screenshot` | ✅ WDA | ✅ CoreDevice, any screen |
+| `gesture`, `touch`, `multi-touch`, `long-press` | ❌ unsupported combinations fail with a hint | ❌ |
+| `button`, `keyboard-state`, `app-state`, recording/streaming | ❌ | ❌ |
 
 Pass a physical UDID to a `sim-use ios <verb>` (simulator-only by contract) and it fails fast with a pointer back to the routed verbs.
 
-This channel deliberately differs from the simulator backend:
+The audit channel deliberately differs from the WDA and Simulator backends:
 
-  * **No element geometry.** There is no coordinate tap, `swipe`, `gesture` or `multi-touch`. Only the exposed `tap` accessibility action is currently supported; the other verbs reject a physical UDID with the reason and the nearest alternative rather than degrading silently.
+  * **No element geometry.** There is no coordinate tap, `swipe`, `gesture` or `multi-touch`; unsupported verbs reject with the nearest alternative rather than degrading silently.
   * **No `@N` aliases, but stable `#id`s.** Element handles encode a live pointer and expire with their DTX connection, so — like the missing geometry — the cross-invocation `@N` alias cannot be backed faithfully and the outline advertises none. The stable accessibility identifier *can*: the outline shows each element's `#id`, and `tap` accepts it as a positional `#<id>` or `--id` (mirroring the simulator), alongside `--label` / `--label-contains` / `--element-type`. Prefer the `#id` when a label is dynamic — a navigation-bar back button is labelled with the previous screen's title but keeps `#BackButton`, and is an ordinary, tappable row in the outline.
-  * **Screenshots go over CoreDevice, not the audit daemon.** `screenshot` shells out to `xcrun devicectl device capture screenshot`, a separate channel with different rules: it is not limited to development-signed foreground apps and captures whatever is on screen, SpringBoard and system apps included. Screen *recording* exists on the same channel (`devicectl device capture screen-record`) but is capability-gated per device (CoreDevice can report "Screen Recording is not supported by this device") and is not exposed yet.
+  * **Screenshots go over CoreDevice, not the audit daemon.** `screenshot` shells out to `xcrun devicectl device capture screenshot`, so it is not limited to development-signed foreground apps and captures whatever is on screen.
   * **No recording yet.** Screen recording is not exposed (see the CoreDevice capability gate above). `--json` *is* supported on every `ios-device` verb, with the same `{ok, data}` envelope as the rest of the CLI: `devices` returns unified device rows (the `deviceId` / `kind` / `runtime` schema of top-level `sim-use devices --json`), `ui` returns the outline text plus structured rows (`depth` / `role` / `label` / `#identifier`) with element/node counts and timing, `tap` returns the matched element, and `screenshot` returns the saved path. Errors carry a machine-readable `hint` alongside the message.
   * **Slower snapshots.** A full tree costs a few seconds. `ui --fast` stops at labelled elements and is roughly 40% quicker, at the cost of about a quarter of the elements.
   * **Reading order, not screen order.** With no frames to sort by, the outline follows accessibility nesting and reading order.
@@ -477,7 +616,7 @@ This channel deliberately differs from the simulator backend:
 
 ## Architecture
 
-sim-use drives iOS Simulators through the lower-level XCFrameworks of Facebook's [idb](https://github.com/facebook/idb) (statically linked), Apple's Accessibility APIs, and the simulator HID pipeline. Android devices are driven through an on-device bridge APK that exposes the AccessibilityService tree and input injection over HTTP, tunnelled via `adb forward`. Physical iOS devices go through a third path: idb's `FBDeviceControl` opens a lockdown service connection, over which sim-use speaks Apple's DTX message protocol to the accessibility audit daemon (screen capture instead shells out to Xcode's `devicectl`). Everything ships as a single binary, and every surface — simulator, Android and physical iOS — supports `--json` with the shared `{ok, data}` envelope.
+sim-use drives iOS Simulators through the lower-level XCFrameworks of Facebook's [idb](https://github.com/facebook/idb) (statically linked), Apple's Accessibility APIs, and the simulator HID pipeline. tvOS uses Appium's XCUITest driver for WebDriver source, screenshots, and Siri Remote button events; every command creates and closes its own Appium session. A modern physical Apple TV reuses a health-checked XCTest/WDA supervisor when a tunnel registry is explicitly configured, and otherwise uses Appium-managed WDA with the signing cache. Android devices are driven through an on-device bridge APK that exposes the AccessibilityService tree and input injection over HTTP, tunnelled via `adb forward`. Physical iOS devices have two channels: the top-level verbs run over Appium/WebDriverAgent (full interaction), while the `ios-device` namespace opens a lockdown service connection through idb's `FBDeviceControl`, over which sim-use speaks Apple's DTX message protocol to the accessibility audit daemon (screen capture instead shells out to Xcode's `devicectl`). Everything ships as a single binary; every command supports `--json` with the shared `{ok, data}` envelope.
 
 
 ## Viewer

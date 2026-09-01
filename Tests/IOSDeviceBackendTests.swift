@@ -530,8 +530,10 @@ struct IOSDeviceBackendTests {
             osVersion: "iOS 26.6",
             state: "Booted"
         )
+        // FBDevice's `Booted` is normalised to the unified physical
+        // vocabulary (`connected`) by `unifiedDevice`.
         let listed = command.format(.init(devices: [summary.unifiedDevice]))
-        #expect(listed.stdout == "00008130-00066D2A10EB8D3A  iPhone One  iOS 26.6  Booted\n")
+        #expect(listed.stdout == "00008130-00066D2A10EB8D3A  iPhone One  iOS 26.6  connected\n")
     }
 
     @Test("devices --json rows reuse the unified Device schema")

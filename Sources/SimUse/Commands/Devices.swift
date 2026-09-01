@@ -4,7 +4,6 @@ import Foundation
 import SimUseCore
 import AndroidBackend
 import iOSSimBackend
-import iOSDeviceBackend
 
 /// Cross-platform device listing. Successor to the legacy
 /// `list-simulators` (iOS-only) and `android devices` verbs, which
@@ -12,28 +11,25 @@ import iOSDeviceBackend
 struct Devices: SimUseExecutableCommand {
     static let configuration = CommandConfiguration(
         commandName: "devices",
-        abstract: "List connected devices across iOS Simulators, Android devices and physical iPhones/iPads.",
+        abstract: "List connected devices across iOS/tvOS Simulators, Android devices and physical Apple devices.",
         discussion: """
-        Aggregates `xcrun simctl list devices` (iOS Simulators),
-        `adb devices` (Android devices / emulators) and FBDeviceControl
-        discovery (physical iPhones / iPads over USB) into a single
-        unified table. `kind` distinguishes the carrier — simulator,
-        emulator or physical — orthogonally to the platform.
+        Aggregates `xcrun simctl list devices` (iOS/tvOS Simulators),
+        `adb devices` (Android devices / emulators) and devicectl /
+        idevice_id discovery (physical iPhones / iPads / Apple TVs) into
+        a single unified table. `kind` distinguishes the carrier —
+        simulator, emulator or physical — orthogonally to the platform.
 
         Default lists only devices sim-use can talk to right now
-        (iOS `Booted`, Android `device`). Pass `--all` to include
-        shutdown sims and offline / unauthorised adb entries — useful
-        when picking which simulator to boot.
-
-        A physical iPhone may be listed by ECID rather than UDID until
-        a session has opened (AMDevice publishes the lockdown UDID
-        lazily); either identifier is accepted by the ios-device verbs.
+        (iOS `Booted`, Android `device`, physical `connected`). Pass
+        `--all` to include shutdown sims and offline / unauthorised
+        adb entries — useful when picking which simulator to boot.
 
         Examples:
           sim-use devices                          # currently usable devices, all targets
           sim-use devices --all                    # also include shutdown / offline
           sim-use devices --platform ios           # iOS only (simulators + physical)
-          sim-use devices --no-physical-ios        # skip FBDeviceControl discovery entirely
+          sim-use devices --platform tvos          # tvOS only (simulators + physical)
+          sim-use devices --no-physical-ios        # skip physical-device discovery entirely
           sim-use devices --json                   # structured output (Viewer, scripts, agents)
 
         JSON envelope (--json):
@@ -42,8 +38,9 @@ struct Devices: SimUseExecutableCommand {
             "data": {
               "devices": [
                 {"deviceId": "...",
-                 "name": "...", "platform": "ios|android",
+                 "name": "...", "platform": "ios|tvos|android",
                  "kind": "simulator|emulator|physical",
+                 "target": "sim|device",
                  "state": "Booted|Shutdown|device|offline|...", "runtime": "iOS 18.6|Android|..."},
                 ...
               ]
@@ -55,7 +52,7 @@ struct Devices: SimUseExecutableCommand {
     @Flag(name: .customLong("all"), help: "Include devices that aren't currently usable (iOS Shutdown sims, Android offline / unauthorised devices). Default is booted-only.")
     var includeAll: Bool = false
 
-    @Flag(name: .customLong("no-physical-ios"), help: "Skip physical iPhone/iPad discovery (FBDeviceControl). Saves ~1 s on hosts with no device attached; simulators and Android are unaffected. Used by consumers that need capabilities physical iOS doesn't carry, e.g. the Viewer (coordinate taps, video streaming).")
+    @Flag(name: .customLong("no-physical-ios"), help: "Skip physical Apple-device discovery (devicectl / idevice_id). Saves the discovery cost on hosts with no device attached; simulators and Android are unaffected. Used by consumers that need capabilities physical devices don't carry, e.g. the Viewer (video streaming).")
     var noPhysicalIOS: Bool = false
 
     @Option(name: .customLong("platform"), help: "Restrict the list to one platform.")
@@ -69,27 +66,23 @@ struct Devices: SimUseExecutableCommand {
     }
 
     func execute() async throws -> ExecutionResult {
-        // The simctl and adb queries are cheap (~50–200ms each); the
-        // physical-iOS discovery costs ~0.4 s with a device attached and
-        // ~1 s when none is (the empty-grace bail). Fire all three in
-        // parallel so the combined latency is the slowest side rather
-        // than their sum. Errors fall through per side so a missing adb
-        // (Android not configured) doesn't kill iOS listing and vice
-        // versa.
+        // The simctl and adb queries are cheap (~50–200ms each); physical
+        // Apple discovery (devicectl / idevice_id, merged inside the Apple
+        // side) is resilient and never throws. Fire both sides in parallel
+        // so the combined latency is the slowest side rather than their
+        // sum. Errors fall through per side so a missing adb (Android not
+        // configured) doesn't kill iOS listing and vice versa.
         async let iosFuture = listIOS()
         async let androidFuture = listAndroid()
-        async let physicalFuture = listPhysicalIOS()
         let iosResult = await iosFuture
         let androidResult = await androidFuture
-        let physicalResult = await physicalFuture
 
-        var combined: [Device] = []
-        if platform != .android { combined.append(contentsOf: iosResult.devices + physicalResult.devices) }
-        if platform != .ios     { combined.append(contentsOf: androidResult.devices) }
-
-        if !includeAll {
-            combined = combined.filter { $0.isUsable }
-        }
+        var combined = Self.filterDevices(
+            appleDevices: iosResult.devices,
+            androidDevices: androidResult.devices,
+            platform: platform,
+            includeAll: includeAll
+        )
 
         // Within a platform, virtual carriers (simulator / emulator)
         // sort before physical hardware — they never coexist on one
@@ -108,12 +101,35 @@ struct Devices: SimUseExecutableCommand {
         // surface a single-line summary so a user running plain
         // `sim-use devices` on a host with no tooling sees something
         // more actionable than "No devices found".
-        if combined.isEmpty, iosResult.failed, androidResult.failed, physicalResult.failed, platform == nil {
+        if combined.isEmpty, iosResult.failed, androidResult.failed, platform == nil {
             FileHandle.standardError.write(Data(
-                "warning: iOS (simctl), Android (adb) and physical-iOS (FBDeviceControl) listings all failed; pass --platform ios|android to scope, or install the missing tooling.\n".utf8
+                "warning: both Apple Simulator (simctl) and Android (adb) listings failed; pass --platform ios|tvos|android to scope, or install the missing tooling.\n".utf8
             ))
         }
         return ExecutionResult(devices: combined)
+    }
+
+    /// Apply platform selection after `simctl` returns its mixed Apple
+    /// runtime list. In particular, `--platform ios` must not leak tvOS
+    /// rows, and `--platform tvos` must not trigger or include adb.
+    static func filterDevices(
+        appleDevices: [Device],
+        androidDevices: [Device],
+        platform: Device.Platform?,
+        includeAll: Bool
+    ) -> [Device] {
+        var devices: [Device]
+        switch platform {
+        case .ios:
+            devices = appleDevices.filter { $0.platform == .ios }
+        case .tvos:
+            devices = appleDevices.filter { $0.platform == .tvos }
+        case .android:
+            devices = androidDevices
+        case .none:
+            devices = appleDevices + androidDevices
+        }
+        return includeAll ? devices : devices.filter(\.isUsable)
     }
 
     /// Each side of the parallel listing reports `(devices, failed)`
@@ -127,23 +143,33 @@ struct Devices: SimUseExecutableCommand {
     }
 
     private func listIOS() async -> SideResult {
-        // If --platform=android, skip the simctl call entirely.
+        // If --platform=android, skip the Apple side entirely.
         if platform == .android { return SideResult(devices: [], failed: false) }
+        // Physical Apple devices (cabled iPhone/iPad, paired Apple TV) come
+        // from devicectl + idevice_id; Simulators from simctl. Merge both so
+        // `devices` shows the full Apple surface (each row carries its
+        // sim|device `target`). Physical enumeration is resilient — it never
+        // throws — so it can't take down the Simulator listing.
+        let physical = noPhysicalIOS ? [] : AppleDeviceLister.listPhysicalDevices()
         do {
             // We always fetch the full list (not `simctl ... booted`)
             // because the `--all` flag changes intent at runtime and
             // the cost of the wider query is small compared to the
             // process spawn itself.
-            let devices = try SimctlDeviceLister.listDevices(bootedOnly: false)
-            return SideResult(devices: devices, failed: false)
+            let sims = try SimctlDeviceLister.listDevices(bootedOnly: false)
+            return SideResult(devices: sims + physical, failed: false)
         } catch {
-            FileHandle.standardError.write(Data("warning: iOS device listing failed: \(error.localizedDescription)\n".utf8))
-            return SideResult(devices: [], failed: true)
+            FileHandle.standardError.write(Data("warning: iOS Simulator listing failed: \(error.localizedDescription)\n".utf8))
+            // simctl failed, but any physical devices we found are still
+            // worth surfacing; only report failure if we have nothing.
+            return SideResult(devices: physical, failed: physical.isEmpty)
         }
     }
 
     private func listAndroid() async -> SideResult {
-        if platform == .ios { return SideResult(devices: [], failed: false) }
+        if platform != nil, platform != .android {
+            return SideResult(devices: [], failed: false)
+        }
         do {
             // adb may simply be unavailable on hosts that don't do
             // Android work; that's not an error worth derailing the
@@ -152,22 +178,6 @@ struct Devices: SimUseExecutableCommand {
             return SideResult(devices: devices, failed: false)
         } catch {
             FileHandle.standardError.write(Data("warning: Android device listing failed: \(error.localizedDescription)\n".utf8))
-            return SideResult(devices: [], failed: true)
-        }
-    }
-
-    private func listPhysicalIOS() async -> SideResult {
-        if platform == .android || noPhysicalIOS { return SideResult(devices: [], failed: false) }
-        do {
-            // FBDeviceControl discovery pumps the main run loop until the
-            // attachment set quiesces (~0.4 s attached, ~1 s empty-grace
-            // bail) — accepted as the cost of physical devices appearing
-            // in the one listing everyone runs. Only USB-attached devices
-            // are discoverable; paired-but-unplugged ones don't appear.
-            let devices = try await DeviceSession.connectedDevices()
-            return SideResult(devices: devices.map(\.unifiedDevice), failed: false)
-        } catch {
-            FileHandle.standardError.write(Data("warning: physical iOS device listing failed: \(error.localizedDescription)\n".utf8))
             return SideResult(devices: [], failed: true)
         }
     }

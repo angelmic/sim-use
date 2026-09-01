@@ -49,6 +49,11 @@ struct Button: SimUseExecutableCommand {
 
     var simulatorUDIDForDaemon: String? { device.resolved }
 
+    /// tvOS never serves this verb (`execute()` throws
+    /// `TVOSCapabilityError`), so reject in-process instead of spawning a
+    /// per-UDID daemon for a device the daemon cannot drive.
+    var daemonBypass: Bool { PlatformRouter.bypassesSimulatorDaemon(udid: device.resolved) }
+
     func format(_ result: ExecutionResult) -> CommandOutput {
         .line("✓ \(buttonType.description) press completed successfully")
     }
@@ -61,12 +66,10 @@ struct Button: SimUseExecutableCommand {
         switch PlatformRouter.resolve(udid: device.resolved) {
         case .android:
             return try executeAndroid()
-        case .iOSDevice:
-            throw TargetCapabilityError.physicalIOS(
-                verb: "button",
-                reason: "hardware-button events are injected through the simulator HID channel, which physical devices do not expose.",
-                alternative: "Press the button on the device itself, or drive on-screen UI with `sim-use ui` + `sim-use tap '#<id>' / --label`."
-            )
+        case .tvOSSim:
+            throw TVOSCapabilityError(command: "button")
+        case .appleDevice:
+            throw DeviceBackendUnsupportedError(command: "button", deviceId: device.resolved)
         case .iOSSim, .none:
             return try await executeIOSSim()
         }

@@ -1,14 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 import Foundation
 
-/// The platforms `sim-use` can target: iOS Simulator, Android
-/// (device or emulator), and physical iOS devices (the accessibility
-/// audit channel — a restricted capability set; see
-/// `TargetCapabilityError`).
-public enum Platform: Equatable {
+/// The platforms `sim-use` can target: iOS/tvOS Simulator, Android, and
+/// physical Apple devices (iOS/tvOS, WebDriverAgent-backed — verbs land in
+/// the DeviceBackend, xd 2.0 Phase 1 T3).
+///
+/// `appleDevice` deliberately carries no iOS-vs-tvOS family: a bare UDID
+/// cannot tell an iPhone from an Apple TV. Routing (which backend owns the
+/// command) only needs "this is a physical Apple device"; the family is a
+/// listing concern, resolved from `devicectl`'s DeviceClass when enumerating
+/// (`Device.Platform` = `.ios` / `.tvos`), not from the UDID shape here.
+public enum Platform: Equatable, Sendable {
     case iOSSim
+    case tvOSSim
     case android
-    case iOSDevice
+    case appleDevice
 }
 
 /// Centralises the UDID-shape heuristics used to decide which backend
@@ -29,51 +35,88 @@ public enum PlatformRouter {
     /// shape doesn't fit any known platform; callers can choose to fail
     /// fast or fall back to a default.
     ///
-    /// Physical iOS devices listed by ECID (AMDevice publishes the
+    /// Physical Apple devices listed by ECID (AMDevice publishes the
     /// lockdown UDID lazily) are invisible to shape-based routing — a
-    /// bare ECID resolves as `.android` or `nil`, never `.iOSDevice`.
-    /// Documented non-goal (#115); the `ios-device` namespace accepts
-    /// ECIDs directly.
-    public static func resolve(udid: String) -> Platform? {
+    /// bare ECID resolves as `.android` or `nil`, never `.appleDevice`.
+    /// Documented non-goal (upstream #115); the `ios-device` namespace
+    /// accepts ECIDs directly.
+    public static func resolve(
+        udid: String,
+        simulatorPlatformLookup: (String) -> Platform? = SimulatorPlatformResolver.livePlatform(for:)
+    ) -> Platform? {
         let trimmed = udid.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return nil }
+        // Physical Apple devices are checked *before* the Android fallback:
+        // a dash-form device UDID otherwise satisfies `looksLikeAndroid`
+        // (length 25, has digits, allowed charset) and mis-routes to adb
+        // (`adb is not on PATH` — P0 breakpoint #2).
+        if looksLikeAppleDevice(trimmed) { return .appleDevice }
         if looksLikeAndroid(trimmed) { return .android }
-        if looksLikeIOSSim(trimmed) { return .iOSSim }
-        if looksLikePhysicalIOSDevice(trimmed) { return .iOSDevice }
+        if looksLikeIOSSim(trimmed) {
+            // A lookup miss (unknown UUID, unsupported runtime family such
+            // as watchOS, or a custom device set with simctl unavailable)
+            // keeps the historical iOS fallback: the iOS backend owns the
+            // clearer "not booted / not found" error surface.
+            return simulatorPlatformLookup(trimmed) ?? .iOSSim
+        }
         return nil
     }
 
-    /// `true` when the UDID looks like an iOS Simulator UDID
+    /// `true` when a device-scoped verb must skip the FBSimulator daemon
+    /// for this UDID. The daemon only drives iOS Simulators; the tvOS
+    /// Simulator and every physical Apple device run through short-lived
+    /// Appium sessions instead. Routing one of those through the daemon
+    /// would spawn a per-UDID daemon for a target it cannot attach to —
+    /// a hang, not a fail-fast — so commands bypass it here.
+    public static func bypassesSimulatorDaemon(udid: String) -> Bool {
+        switch resolve(udid: udid) {
+        case .tvOSSim, .appleDevice:
+            return true
+        case .iOSSim, .android, .none:
+            return false
+        }
+    }
+
+    /// `true` when the UDID looks like an Apple Simulator UDID
     /// (8-4-4-4-12 hex, as emitted by `simctl list`).
     public static func looksLikeIOSSim(_ udid: String) -> Bool {
         let pattern = "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
         return udid.range(of: pattern, options: .regularExpression) != nil
     }
 
-    /// `true` when the UDID looks like a physical iOS device identifier:
-    /// modern 8-16 hex (`00008130-00066D2A10EB8D3A`, iPhone XS and later)
-    /// or legacy 40-hex (iPhone X and earlier). `resolve` maps both
-    /// shapes to `.iOSDevice`; the standalone predicate also guards the
-    /// Android heuristic (so the modern shape is never misread as an
-    /// adb serial) and the daemon-dispatch exclusion (physical targets
-    /// run in-process until #120).
-    public static func looksLikePhysicalIOSDevice(_ udid: String) -> Bool {
+    /// A physical Apple device UDID in the modern ECID-derived form:
+    /// 8 hex, a dash, then 16 hex — e.g. `00008110-001234567890001E`
+    /// (iPhone 15/16/17-generation, as emitted by `idevice_id -l` and
+    /// `devicectl`'s `hardwareProperties.udid`). Match case-insensitively
+    /// because shell variables and third-party tooling can normalize it.
+    static let appleDeviceDashUDIDPattern = "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}$"
+
+    /// A physical Apple device UDID in the classic 40-hex form —
+    /// e.g. `0123456789abcdef0123456789abcdef01234567` (older iPhone and
+    /// Apple TV). No dashes, exactly 40 characters; accept either case.
+    static let appleDeviceClassicUDIDPattern = "^[0-9A-Fa-f]{40}$"
+
+    /// `true` when the UDID looks like a physical Apple device (iOS or tvOS),
+    /// in either the modern dash form or the classic 40-hex form. Checked
+    /// before `looksLikeAndroid` in `resolve` so a device never falls into
+    /// the adb path (P0 breakpoint #2). Neither pattern overlaps the
+    /// Simulator UUID shape (which carries four dashes), so the ordering is
+    /// safe.
+    public static func looksLikeAppleDevice(_ udid: String) -> Bool {
         let trimmed = udid.trimmingCharacters(in: .whitespacesAndNewlines)
-        let modern = "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}$"
-        let legacy = "^[0-9A-Fa-f]{40}$"
-        return trimmed.range(of: modern, options: .regularExpression) != nil
-            || trimmed.range(of: legacy, options: .regularExpression) != nil
+        if trimmed.isEmpty { return false }
+        if trimmed.range(of: appleDeviceDashUDIDPattern, options: .regularExpression) != nil { return true }
+        if trimmed.range(of: appleDeviceClassicUDIDPattern, options: .regularExpression) != nil { return true }
+        return false
     }
 
     /// `true` when the UDID looks like an Android serial.
     ///
     /// Heuristic, in order:
     ///   1. `emulator-…` prefix → always Android.
-    ///   2. iOS Simulator or physical iOS device UDID shape → never
-    ///      Android. Without the physical exclusion the modern
-    ///      8-16-hex device UDID clears rule 3 and a plugged-in iPhone
-    ///      is diagnosed as an unreachable adb serial.
-    ///   3. ASCII-only, length 4–32, allowed `[A-Za-z0-9._:-]`, with at
+    ///   2. Apple Simulator UDID shape → never Android.
+    ///   3. Physical Apple device UDID shape → never Android.
+    ///   4. ASCII-only, length 4–32, allowed `[A-Za-z0-9._:-]`, with at
     ///      least one digit → Android.
     ///
     /// Rule 3 keeps typos like `--udid foo` (too short) or
@@ -85,7 +128,10 @@ public enum PlatformRouter {
         if trimmed.isEmpty { return false }
         if trimmed.hasPrefix("emulator-") { return true }
         if looksLikeIOSSim(trimmed) { return false }
-        if looksLikePhysicalIOSDevice(trimmed) { return false }
+        // Physical Apple device UDIDs (dash form fits the length/charset
+        // rule below) are never adb serials — exclude them explicitly so
+        // rule 3 can't claim them.
+        if looksLikeAppleDevice(trimmed) { return false }
         guard trimmed.count >= 4, trimmed.count <= 32 else { return false }
         let allowed: (Character) -> Bool = { ch in
             ch.isASCII && (

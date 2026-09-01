@@ -4,7 +4,7 @@ import Foundation
 /// Structured result of rendering an accessibility tree to the outline
 /// format defined in `DESCRIBE_UI_OUTLINE.md`.
 ///
-/// Cross-platform shape consumed by both iOS and Android backends.
+/// Cross-platform shape consumed by iOS, tvOS, and Android backends.
 /// `text` is the human-facing stdout payload for `describe-ui`. `entries`
 /// is the same information in structured form and is what `--json`
 /// surfaces and what the `@N`/`#N` alias cache is derived from. `lists`
@@ -36,7 +36,7 @@ public struct Outline: Equatable, Sendable {
     /// handles (`@N`, optional `#N` / `#N@M`) and per-platform descriptor
     /// fields. `value` / `resource_id` / `hint` are optional cross-
     /// platform extensions added for the Android backend; iOS populates
-    /// `value` from AXValue and leaves the other two nil.
+    /// `value` from AXValue, while tvOS currently leaves all three nil.
     public struct Entry: Codable, Equatable, Sendable {
         public let aliases: Aliases
         public let role: String

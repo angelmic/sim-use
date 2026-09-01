@@ -4,6 +4,7 @@ import Foundation
 import SimUseCore
 import AndroidBackend
 import iOSSimBackend
+import DeviceBackend
 
 /// Top-level cross-platform `swipe` verb. Owns the verb-specific flag
 /// surface, resolves the target platform via `PlatformRouter`, then
@@ -21,13 +22,13 @@ struct Swipe: SimUseExecutableCommand {
 
     @OptionGroup var coordinates: SwipeCoordinateOptions
 
-    @Option(name: .customLong("coordinate-space"), help: "iOS only: 'native' (device-native portrait, the default) or 'ui' (visual space as printed by describe-ui; orientation-calibrated per command). Android coordinates are always display space, which already rotates with the UI — the flag is accepted and ignored there.")
+    @Option(name: .customLong("coordinate-space"), help: "iOS Simulator only: 'native' (device-native portrait, the default) or 'ui' (visual space as printed by describe-ui; orientation-calibrated per command). Physical iOS uses WDA display-space coordinates and rejects 'ui'. Android coordinates are always display space, which already rotates with the UI — the flag is accepted and ignored there.")
     var coordinateSpace: CoordinateSpace = .native
 
     @Option(name: .customLong("duration"), help: "Duration of the swipe in seconds.")
     var duration: Double?
 
-    @Option(name: .customLong("delta"), help: "Distance between touch points in pixels.")
+    @Option(name: .customLong("delta"), help: "iOS Simulator only: distance between interpolated touch points in pixels. Physical iOS W3C actions interpolate internally.")
     var delta: Double?
 
     @Option(name: .customLong("pre-delay"), help: "Delay before starting the swipe in seconds.")
@@ -38,6 +39,12 @@ struct Swipe: SimUseExecutableCommand {
 
     @OptionGroup var device: DeviceOptions
 
+    @Option(
+        name: .customLong("bundle-id"),
+        help: "Physical Apple device only: attach the WebDriverAgent session to this app and bring it to the foreground, so the swipe targets that app instead of the home screen. Ignored on the iOS Simulator and Android."
+    )
+    var bundleId: String?
+
     @OptionGroup var json: JSONOutputOptions
 
     var jsonOutput: Bool { json.enabled }
@@ -47,6 +54,11 @@ struct Swipe: SimUseExecutableCommand {
     }
 
     var simulatorUDIDForDaemon: String? { device.resolved }
+
+    /// The FBSimulator daemon drives only iOS Simulators; tvOS and physical
+    /// Apple devices run through Appium, so reject/route in-process instead
+    /// of spawning a per-UDID daemon for a target it cannot drive.
+    var daemonBypass: Bool { PlatformRouter.bypassesSimulatorDaemon(udid: device.resolved) }
 
     /// Mirror `Tap` / `Button`'s "✓ … completed successfully" line.
     /// Without this the cross-platform `sim-use swipe` is silent on
@@ -77,12 +89,10 @@ struct Swipe: SimUseExecutableCommand {
         switch PlatformRouter.resolve(udid: device.resolved) {
         case .android:
             return try await executeAndroid()
-        case .iOSDevice:
-            throw TargetCapabilityError.physicalIOS(
-                verb: "swipe",
-                reason: "swipes are coordinate HID sequences, and the accessibility audit channel exposes no coordinate input or element geometry.",
-                alternative: "Interact through accessibility actions instead: `sim-use ui` reads the outline, then `sim-use tap '#<id>' / --label` activates an element. Scrolling on physical devices is not available yet."
-            )
+        case .tvOSSim:
+            throw TVOSCapabilityError(command: "swipe")
+        case .appleDevice:
+            return try await executeAppleDevice()
         case .iOSSim, .none:
             return try await executeIOSSim()
         }
@@ -91,6 +101,34 @@ struct Swipe: SimUseExecutableCommand {
     private func executeIOSSim() async throws -> ExecutionResult {
         let sub = makeIOSSubcommand()
         return try await sub.execute()
+    }
+
+    /// Physical iOS device: a W3C pointer swipe from start to end over the
+    /// requested duration (300 ms when unspecified). tvOS is rejected by
+    /// the controller with `TVOSCapabilityError`.
+    private func executeAppleDevice() async throws -> ExecutionResult {
+        if coordinateSpace == .ui {
+            throw CLIError(
+                errorDescription: "--coordinate-space ui is not supported on physical Apple devices; WDA accepts display-space coordinates directly."
+            )
+        }
+        if delta != nil {
+            throw CLIError(
+                errorDescription: "--delta is not supported on physical Apple devices; W3C pointer actions interpolate the swipe."
+            )
+        }
+        let coords = try resolvedCoordinates()
+        let durationMs = duration.map { Int(($0 * 1000).rounded()) } ?? 300
+        try await AppleDeviceController.live().swipe(
+            udid: device.resolved,
+            from: (x: coords.startX, y: coords.startY),
+            to: (x: coords.endX, y: coords.endY),
+            durationMs: durationMs,
+            bundleId: bundleId,
+            preDelay: preDelay,
+            postDelay: postDelay
+        )
+        return ExecutionResult(coordinates: coords)
     }
 
     /// Construct the backend command and copy every parsed flag across.

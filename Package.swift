@@ -91,6 +91,18 @@ let package = Package(
             name: "iOSDeviceBackend",
             targets: ["iOSDeviceBackend"]
         ),
+        .library(
+            name: "TVOSBackend",
+            targets: ["TVOSBackend"]
+        ),
+        .library(
+            name: "AppiumCore",
+            targets: ["AppiumCore"]
+        ),
+        .library(
+            name: "DeviceBackend",
+            targets: ["DeviceBackend"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0"),
@@ -170,6 +182,47 @@ let package = Package(
                 .copy("Resources"),
             ]
         ),
+        .target(
+            name: "AppiumCore",
+            // The W3C WebDriver / Appium protocol layer, generalized out of
+            // TVOSBackend so iOS/tvOS device backends can share one client.
+            // Platform-specific capability assembly and command semantics
+            // (e.g. tvOS `mobile: pressButton`) live in the backends, not here.
+            dependencies: [
+                "SimUseCore",
+            ],
+            path: "Sources/AppiumCore"
+        ),
+        .target(
+            name: "DeviceBackend",
+            // Physical Apple device (iOS/tvOS) verb engine: fail-fast
+            // preflight, capability assembly, and the WebDriverAgent-backed
+            // verbs (xd 2.0 Phase 1 T3). Depends only on the generic Appium
+            // client and the shared core — the CLI layer (SimUse executable,
+            // TVOSBackend) routes physical-device UDIDs here.
+            dependencies: [
+                "SimUseCore",
+                "AppiumCore",
+            ],
+            path: "Sources/DeviceBackend",
+            resources: [
+                .copy("Resources"),
+            ]
+        ),
+        .target(
+            name: "TVOSBackend",
+            dependencies: [
+                "SimUseCore",
+                "AppiumCore",
+                // The tvOS command surface reuses DeviceBackend's preflight
+                // and device-capability assembly for the physical Apple TV
+                // path (a bare Appium session on a device needs the
+                // xcodebuild-flow caps, not the Simulator ones).
+                "DeviceBackend",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
+            path: "Sources/TVOSBackend"
+        ),
         .executableTarget(
             name: "SimUse",
             dependencies: [
@@ -179,6 +232,8 @@ let package = Package(
                 "AndroidBackend",
                 "iOSSimBackend",
                 "iOSDeviceBackend",
+                "TVOSBackend",
+                "DeviceBackend",
                 "FBSimulatorControl",
                 "FBControlCore",
                 "XCTestBootstrap",
@@ -220,6 +275,9 @@ let package = Package(
             exclude: [
                 "SimUseCoreTests",
                 "AndroidBackendTests",
+                "TVOSBackendTests",
+                "AppiumCoreTests",
+                "DeviceBackendTests",
             ],
             resources: [
                 .copy("README.md"),
@@ -235,7 +293,12 @@ let package = Package(
         .testTarget(
             name: "SimUseCoreTests",
             dependencies: ["SimUseCore"],
-            path: "Tests/SimUseCoreTests"
+            path: "Tests/SimUseCoreTests",
+            resources: [
+                // Shape-preserving synthetic `devicectl list devices
+                // --json-output` fixture; never commit host device identity.
+                .copy("Fixtures")
+            ]
         ),
         .testTarget(
             name: "AndroidBackendTests",
@@ -245,6 +308,21 @@ let package = Package(
             // it as a resource would emit a SwiftPM warning. Add a
             // `.copy("Fixtures")` entry when real fixture files
             // land.
+        ),
+        .testTarget(
+            name: "TVOSBackendTests",
+            dependencies: ["TVOSBackend", "SimUseCore"],
+            path: "Tests/TVOSBackendTests"
+        ),
+        .testTarget(
+            name: "AppiumCoreTests",
+            dependencies: ["AppiumCore", "SimUseCore"],
+            path: "Tests/AppiumCoreTests"
+        ),
+        .testTarget(
+            name: "DeviceBackendTests",
+            dependencies: ["DeviceBackend", "AppiumCore", "SimUseCore"],
+            path: "Tests/DeviceBackendTests"
         ),
         .plugin(
             name: "VersionPlugin",

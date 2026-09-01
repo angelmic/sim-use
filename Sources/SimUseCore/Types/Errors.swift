@@ -41,10 +41,10 @@ public struct PhysicalIOSDeviceError: LocalizedError, HintProviding {
     }
 
     public var errorDescription: String? {
-        "\(identifier) is a physical iOS device; this command only drives iOS Simulators."
+        "\(identifier) is a physical Apple device; this command only drives Simulators."
     }
 
     public var hint: String? {
-        "Use the top-level verbs, which route physical iOS devices automatically: 'sim-use ui', 'sim-use tap '#<id>' / --label', and 'sim-use screenshot' (experimental; other verbs are not available on this channel). The 'sim-use ios-device' namespace also works, and additionally accepts ECIDs."
+        "Use the top-level verbs, which route physical Apple devices automatically over WebDriverAgent: 'sim-use ui', 'tap', 'swipe', 'type', 'paste' and 'screenshot'. The 'sim-use ios-device' namespace offers a zero-setup accessibility-audit alternative and additionally accepts ECIDs; physical Apple TVs go through 'sim-use tvos <verb>'."
     }
 }

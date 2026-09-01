@@ -105,6 +105,11 @@ struct MultiTouch: SimUseExecutableCommand {
 
     var simulatorUDIDForDaemon: String? { device.resolved }
 
+    /// tvOS never serves this verb (`execute()` throws
+    /// `TVOSCapabilityError`), so reject in-process instead of spawning a
+    /// per-UDID daemon for a device the daemon cannot drive.
+    var daemonBypass: Bool { PlatformRouter.bypassesSimulatorDaemon(udid: device.resolved) }
+
     func format(_ result: ExecutionResult) -> CommandOutput {
         .line("✓ multi-touch (\(x1),\(y1))/(\(x2),\(y2)) → (\(x1End),\(y1End))/(\(x2End),\(y2End)) completed")
     }
@@ -123,12 +128,10 @@ struct MultiTouch: SimUseExecutableCommand {
         switch PlatformRouter.resolve(udid: device.resolved) {
         case .android:
             return try await executeAndroid()
-        case .iOSDevice:
-            throw TargetCapabilityError.physicalIOS(
-                verb: "multi-touch",
-                reason: "multi-touch is coordinate HID, and the accessibility audit channel exposes no coordinate input.",
-                alternative: "Interact through accessibility actions instead: `sim-use ui` reads the outline, then `sim-use tap '#<id>' / --label` activates an element."
-            )
+        case .tvOSSim:
+            throw TVOSCapabilityError(command: "multi-touch")
+        case .appleDevice:
+            throw DeviceBackendUnsupportedError(command: "multi-touch", deviceId: device.resolved)
         case .iOSSim, .none:
             return try await executeIOSSim()
         }

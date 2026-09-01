@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 @testable import SimUse
 @testable import iOSSimBackend
+@testable import TVOSBackend
 import ArgumentParser
 import Foundation
 import SimUseCore
@@ -117,6 +118,7 @@ private func assertFullyInitialized(
 @Suite("Forwarder initialization guard")
 struct ForwarderInitializationGuardTests {
     private let iosUDID = "9CD7C6E7-45B3-4E59-BBF2-4D12A9457CD0"
+    private let tvosUDID = "8737CB71-6462-41EC-B13E-E7C5E8F033E9"
 
     // Meta-test: the audit must actually detect definition state, or
     // every green result below is vacuous. A hand-built command with
@@ -192,6 +194,26 @@ struct ForwarderInitializationGuardTests {
     @Test("describe-ui forwarder copies every field")
     func describeUI() throws {
         assertFullyInitialized(try DescribeUI.parse(["--udid", iosUDID]).makeIOSSubcommand())
+    }
+
+    @Test("describe-ui tvOS forwarder copies every field")
+    func describeUITVOS() throws {
+        assertFullyInitialized(
+            try DescribeUI.parse([
+                "--device", tvosUDID,
+                "--bundle-id", "com.example.TVApp",
+            ]).makeTVOSSubcommand()
+        )
+    }
+
+    @Test("screenshot tvOS forwarder copies every field")
+    func screenshotTVOS() throws {
+        assertFullyInitialized(
+            try Screenshot.parse([
+                "--device", tvosUDID,
+                "--bundle-id", "com.example.TVApp",
+            ]).makeTVOSSubcommand()
+        )
     }
 
     @Test("keyboard-state forwarder copies every field")

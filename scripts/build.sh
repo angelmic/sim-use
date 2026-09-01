@@ -186,12 +186,14 @@ function copy_resource_bundle() {
 # Stage every SwiftPM-emitted resource bundle the build needs.
 # `SimUse_SimUse.bundle` carries the iOS / shared assets and has always
 # shipped. `SimUse_AndroidBackend.bundle` carries the bundled device-bridge
-# APK so `sim-use android init` can push it to the device — without this
-# stage step the built sim-use silently lacks Android support.
+# APK so `sim-use android init` can push it to the device.
+# `SimUse_DeviceBackend.bundle` carries the tvOS XCTest supervisor/loader;
+# without it the installed-runner fast path cannot launch WDA.
 function copy_all_resource_bundles() {
   local output_base_dir="$1"
   copy_resource_bundle "$output_base_dir" "SimUse_SimUse.bundle"
   copy_resource_bundle "$output_base_dir" "SimUse_AndroidBackend.bundle"
+  copy_resource_bundle "$output_base_dir" "SimUse_DeviceBackend.bundle"
 }
 
 function clone_idb_repo() {

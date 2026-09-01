@@ -47,10 +47,11 @@ make e2e            # BOTH iOS + Android in sequence (needs a booted sim AND an 
 make e2e-ios        # iOS only — booted simulator + Playground fixture
 make e2e-android    # Android only — reachable device/emulator + Playground fixture
 make e2e-matrix     # iOS across Xcode 26/27 × Device Hub closed/open legs (~35 min default)
+make e2e-tvos       # tvOS only (experimental, not in `make e2e`) — tvOS Simulator + Appium
 make eval           # agent evals (real `claude -p` cost; prompts before running)
 ```
 
-E2E suites compile always but skip unless `SIM_USE_E2E=1` (iOS) / `SIM_USE_E2E_ANDROID=1` (Android) is set — `make test` never touches a device, which is why CI needs no simulator. The runners set those vars for you.
+E2E suites compile always but skip unless `SIM_USE_E2E=1` (iOS) / `SIM_USE_E2E_ANDROID=1` (Android) is set — `make test` never touches a device, which is why CI needs no simulator. The runners set those vars for you. The tvOS suite additionally needs `TVOS_SIMULATOR_UDID` and a reachable Appium server (`appium --port 4723`, XCUITest driver); `scripts/test-runner-tvos.sh` arranges everything including the `Playgrounds/tvOS` focus-grid fixture.
 
 **Budget the time: a full green `make e2e-ios` run is ~15 minutes.** The iOS suites drive real HID gestures and wait on simulator animations/keyboard settling, so per-suite waits dominate — this is expected, not a hang. `make e2e` (both platforms) is ~20+ min. When you only touched one platform, run just that platform's target. The runners keep going past a failed suite and print a full pass/fail map at the end, so read the summary rather than assuming the first red aborted the rest.
 
@@ -68,37 +69,43 @@ After any non-trivial change, at minimum:
 
 ## Module layout
 
-Five SwiftPM targets; dependency graph flows in one direction.
+Nine SwiftPM source targets; dependency graph flows in one direction.
 
 | Target | Path | Depends on |
 |---|---|---|
 | `SimUseCore` | `Sources/SimUseCore/` | Foundation + ArgumentParser |
 | `SimUseVideo` | `Sources/SimUseVideo/` | SimUseCore + AVFoundation/ImageIO |
+| `AppiumCore` | `Sources/AppiumCore/` | SimUseCore |
+| `DeviceBackend` | `Sources/DeviceBackend/` | SimUseCore + AppiumCore |
+| `iOSDeviceBackend` | `Sources/iOSDeviceBackend/` | SimUseCore + FBDeviceControl + FBControlCore + ArgumentParser |
 | `iOSSimBackend` | `Sources/iOSSimBackend/` | SimUseCore + SimUseVideo + FB* XCFrameworks + AVFoundation |
 | `AndroidBackend` | `Sources/AndroidBackend/` | SimUseCore + SimUseVideo + ArgumentParser |
-| `SimUse` (executable) | `Sources/SimUse/` | SimUseCore + SimUseVideo + iOSSimBackend + AndroidBackend + FB* |
+| `TVOSBackend` | `Sources/TVOSBackend/` | SimUseCore + AppiumCore + DeviceBackend + ArgumentParser |
+| `SimUse` (executable) | `Sources/SimUse/` | SimUseCore + SimUseVideo + iOSSimBackend + iOSDeviceBackend + AndroidBackend + TVOSBackend + DeviceBackend + FB* |
 
 `SimUseVideo` holds the platform-neutral host-side video plumbing (H.264 Annex B parsing, passthrough muxing, `AVAssetWriter` encoding, frame utilities) shared by the iOS and Android recording/streaming paths. It must stay FB*-free — anything that needs FBSimulatorControl belongs in `iOSSimBackend` (e.g. the `VideoFrameUtilities.captureScreenshotData` extension), anything adb-shaped in `AndroidBackend`.
 
 ### Verb dispatch
 
-A verb (tap, swipe, type, ...) reaches three surfaces:
+A shared verb reaches up to five surfaces:
 
-1. **Top-level** — `Sources/SimUse/Commands/<Verb>.swift`. Resolves the target via `PlatformRouter`, then forwards to the iOS or Android backend.
+1. **Top-level** — `Sources/SimUse/Commands/<Verb>.swift`. Resolves the target via `PlatformRouter`, then forwards to the owning backend. tvOS currently participates in `describe-ui` and `screenshot`; touch/typing verbs reject it with a focus-navigation hint.
 2. **`sim-use ios <verb>`** — `Sources/iOSSimBackend/Verbs/IOSSim<Verb>Command.swift`.
 3. **`sim-use android <verb>`** — `Sources/AndroidBackend/Verbs/Android<Verb>Command.swift`.
+4. **`sim-use tvos <verb>`** — `Sources/TVOSBackend/Verbs/TVOS<Verb>Command.swift`. tvOS adds the focus-specific `remote` verb rather than coordinate gestures.
+5. **`sim-use ios-device <verb>`** — nested commands in `Sources/iOSDeviceBackend/Verbs/IOSDeviceCommand.swift`. This is the lightweight physical-iOS accessibility-audit channel; it remains distinct from top-level physical-device routing through WDA.
 
 Four verbs are iOS-only (`key`, `key-combo`, `key-sequence`, `batch`) — no top-level alias.
 
 ### Adding a new verb
 
-- **Cross-platform**: write `IOSSim<Verb>Command` + `Android<Verb>Command`, plus a top-level forwarder in `Sources/SimUse/Commands/<Verb>.swift`. Register in `IOSSimCommand.swift`, `AndroidCommand.swift`, and `main.swift`.
+- **Cross-platform**: write the relevant backend commands, plus a top-level forwarder in `Sources/SimUse/Commands/<Verb>.swift`. Register in each participating namespace and `main.swift`. Only opt tvOS in when the verb has focus-driven semantics or an Appium equivalent.
 - **iOS-only**: write `IOSSim<Verb>Command`, register in `IOSSimCommand` only. Use `HIDKeyCommandHelp.androidUnsupportedMessage` to reject Android UDIDs (see `IOSSimKeyCommand`).
-- **Shared flags**: `@OptionGroup var udid: UDIDOptions` + `@OptionGroup var json: JSONOutputOptions`.
+- **Shared flags**: `@OptionGroup var device: DeviceOptions` + `@OptionGroup var json: JSONOutputOptions`.
 
 ### Daemon
 
-`SimUseExecutableCommand.run()` forwards UDID-scoped verbs to a per-UDID auto-spawned daemon (`Sources/SimUseCore/Daemon/`). Platform-agnostic — both iOS and Android verbs route through it. Key regression test: `Tests/DaemonCommandParserInjectionTests.swift`.
+`SimUseExecutableCommand.run()` forwards eligible UDID-scoped verbs to a per-UDID auto-spawned daemon (`Sources/SimUseCore/Daemon/`). iOS and Android verbs can route through it; tvOS commands deliberately bypass it because each operation owns a short-lived Appium session. Key regression test: `Tests/DaemonCommandParserInjectionTests.swift`.
 
 ## Android development
 

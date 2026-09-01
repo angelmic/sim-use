@@ -4,7 +4,8 @@ import Foundation
 import SimUseCore
 import AndroidBackend
 import iOSSimBackend
-import iOSDeviceBackend
+import TVOSBackend
+import DeviceBackend
 
 /// Top-level cross-platform `describe-ui` verb. Owns the flag surface
 /// and resolves the target platform, then delegates to the per-backend
@@ -16,12 +17,20 @@ import iOSDeviceBackend
 struct DescribeUI: SimUseExecutableCommand {
     typealias ExecutionResult = IOSSimDescribeUICommand.ExecutionResult
 
+    enum ExecutionBackend: Equatable {
+        case android
+        case iOSSimulator
+        case tvOSSimulator
+        case appleDevice
+    }
+
     static let configuration = CommandConfiguration(
         abstract: "Describes the UI hierarchy of a booted simulator using accessibility information.",
         aliases: ["ui"]
     )
 
     @OptionGroup var device: DeviceOptions
+    @OptionGroup var tvosTarget: TVOSTargetOptions
 
     @Option(
         name: .customLong("point"),
@@ -78,6 +87,12 @@ struct DescribeUI: SimUseExecutableCommand {
 
     var jsonOutput: Bool { json.enabled }
 
+    /// tvOS and physical Apple devices use short-lived Appium sessions and
+    /// must not be routed through the iOS FBSimulator daemon.
+    var daemonBypass: Bool {
+        PlatformRouter.bypassesSimulatorDaemon(udid: device.resolved)
+    }
+
     @Flag(
         name: .customLong("include-offscreen"),
         help: "Android-only. Include nodes whose `isVisibleToUser` is false (recycled list cells, off-screen ViewPager neighbours, fragments mid-detach). Default is to filter them out — they pad the outline with rows the user can't actually see. Ignored on iOS (the iOS pipeline has no equivalent visibility flag)."
@@ -101,13 +116,28 @@ struct DescribeUI: SimUseExecutableCommand {
     }
 
     func execute() async throws -> ExecutionResult {
-        switch PlatformRouter.resolve(udid: device.resolved) {
+        switch Self.executionBackend(for: PlatformRouter.resolve(udid: device.resolved)) {
         case .android:
             return try executeAndroid()
-        case .iOSDevice:
-            return try await executeIOSDevice()
-        case .iOSSim, .none:
+        case .tvOSSimulator:
+            return try await executeTVOS()
+        case .iOSSimulator:
             return try await executeIOSSim()
+        case .appleDevice:
+            return try await executeAppleDevice()
+        }
+    }
+
+    static func executionBackend(for platform: Platform?) -> ExecutionBackend {
+        switch platform {
+        case .android:
+            return .android
+        case .tvOSSim:
+            return .tvOSSimulator
+        case .appleDevice:
+            return .appleDevice
+        case .iOSSim, .none:
+            return .iOSSimulator
         }
     }
 
@@ -118,6 +148,55 @@ struct DescribeUI: SimUseExecutableCommand {
     private func executeIOSSim() async throws -> ExecutionResult {
         let sub = makeIOSSubcommand()
         return try await sub.execute()
+    }
+
+    private func executeTVOS() async throws -> ExecutionResult {
+        let sub = makeTVOSSubcommand()
+        return reshape(try await sub.execute())
+    }
+
+    /// Physical Apple device: an Apple TV renders through the tvOS device
+    /// path (focus-aware, ≤16 ui fail-fast); an iPhone/iPad through the iOS
+    /// device outline (#id selectors). Family comes from `devicectl`; an
+    /// unresolved UDID defaults to the iOS path, whose preflight surfaces
+    /// the clearer not-found / tunnel error.
+    private func executeAppleDevice() async throws -> ExecutionResult {
+        let bundleId = tvosTarget.bundleId
+        if DeviceInfoResolver().resolve(udid: device.resolved)?.family == .tvos {
+            return reshape(try await TVOSDeviceController.live().describeUI(
+                udid: device.resolved, includeRaw: jsonOutput, bundleId: bundleId
+            ))
+        }
+        return reshape(try await AppleDeviceController.live().describeUI(
+            udid: device.resolved, includeRaw: jsonOutput, bundleId: bundleId
+        ))
+    }
+
+    /// Map the shared cross-platform envelope into this command's local
+    /// `ExecutionResult` so every backend surfaces one shape.
+    private func reshape(_ result: DescribeUIResult) -> ExecutionResult {
+        ExecutionResult(
+            platform: result.platform.rawValue,
+            raw: result.raw,
+            outline: result.outline,
+            entries: result.entries,
+            lists: result.lists,
+            screen: result.screen,
+            appLabel: result.appLabel,
+            appPackage: result.appPackage,
+            crashDialog: result.crashDialog
+        )
+    }
+
+    /// Construct the tvOS backend command and copy every parsed flag across.
+    /// In particular, the target bundle keeps a cold WDA launch from leaving
+    /// the source request attached to the tvOS Home screen.
+    func makeTVOSSubcommand() -> TVOSDescribeUICommand {
+        var sub = TVOSDescribeUICommand()
+        sub.device = device
+        sub.target = tvosTarget
+        sub.json = json
+        return sub
     }
 
     /// Construct the backend command and copy every parsed flag across.
@@ -135,48 +214,6 @@ struct DescribeUI: SimUseExecutableCommand {
         sub.json = json
         sub.noRaw = noRaw
         return sub
-    }
-
-    /// Physical-iOS dispatch: routes through the audit-channel reader
-    /// (`IOSDeviceCommand.UI.performUI`, shared with `sim-use ios-device
-    /// ui`) and reshapes its result into the shared envelope. The
-    /// restricted shape is explicit rather than faked: `kind:
-    /// "physical"`, no `raw` tree, no `entries`/`lists` (the channel
-    /// exposes no frames, so there is nothing to alias or sort), no
-    /// `screen`. The outline text — including the element/node/timing
-    /// summary line, so this surface stays byte-identical to
-    /// `ios-device ui` — is the payload; elements are addressed by the
-    /// `#id`s it renders. The probe-tuning flags (`--max-probes` etc.)
-    /// drive the simulator quadtree and have no meaning here; like
-    /// `--include-offscreen` on iOS, they are accepted and ignored.
-    /// `--point` is not: it promises coordinate semantics, so it
-    /// rejects loudly instead of degrading.
-    private func executeIOSDevice() async throws -> ExecutionResult {
-        guard point == nil else {
-            throw TargetCapabilityError.physicalIOS(
-                verb: "describe-ui --point",
-                reason: "the accessibility audit channel exposes no element geometry, so there is nothing to hit-test at a coordinate.",
-                alternative: "Run `sim-use ui --device \(device.resolved)` and read the full outline; elements are addressed by `#<id>` or label."
-            )
-        }
-        return Self.physicalExecutionResult(from: try await IOSDeviceCommand.UI.performUI(udid: device.resolved))
-    }
-
-    /// Pure reshape of the audit-channel result into the shared
-    /// envelope, split out so tests can pin the restricted shape
-    /// without a device.
-    static func physicalExecutionResult(from result: IOSDeviceCommand.UI.ExecutionResult) -> ExecutionResult {
-        ExecutionResult(
-            platform: "ios",
-            kind: "physical",
-            raw: nil,
-            outline: IOSDeviceCommand.UI.renderedText(result),
-            entries: [],
-            lists: [],
-            screen: nil,
-            appLabel: "",
-            appPackage: ""
-        )
     }
 
     /// Android dispatch: routes through `AndroidDescribeUICommand.performDescribeUI`

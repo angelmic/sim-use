@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sync Upstream Main"
+  short_description: "Safely sync this fork with upstream/main"
+  default_prompt: "Use $sync-upstream-main to synchronize this sim-use fork with upstream/main through every required verification and deployment gate."

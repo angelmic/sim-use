@@ -19,6 +19,16 @@ final class DeviceModelTests: XCTestCase {
         XCTAssertFalse(d.isUsable)
     }
 
+    func testTVOSBootedIsUsable() {
+        let d = Device(udid: "X", name: "Apple TV", platform: .tvos, kind: .simulator, state: "Booted", runtime: "tvOS 18.2")
+        XCTAssertTrue(d.isUsable)
+    }
+
+    func testTVOSShutdownIsNotUsable() {
+        let d = Device(udid: "X", name: "Apple TV", platform: .tvos, kind: .simulator, state: "Shutdown", runtime: "tvOS 18.2")
+        XCTAssertFalse(d.isUsable)
+    }
+
     func testIOSTransitionalStatesAreNotUsable() {
         // sim-use can't drive HID against a half-booted sim, so be strict.
         for state in ["Booting", "Shutting Down", "Creating"] {
@@ -51,7 +61,11 @@ final class DeviceModelTests: XCTestCase {
         // the legacy `udid` key was dual-emitted during the deprecation
         // window and is no longer written as of Phase 2. Decoding still
         // accepts `udid`-only payloads (see testJSONAcceptsUDIDOnly).
-        XCTAssertEqual(json, #"{"deviceId":"u","kind":"simulator","name":"n","platform":"ios","runtime":"iOS 18.6","state":"Booted"}"#)
+        // `kind` (simulator|emulator|physical) is the carrier axis; `target`
+        // (sim|device) is its two-valued view, kept on the wire so existing
+        // consumers can still tell a bootable Simulator from a connected
+        // physical device.
+        XCTAssertEqual(json, #"{"deviceId":"u","kind":"simulator","name":"n","platform":"ios","runtime":"iOS 18.6","state":"Booted","target":"sim"}"#)
         XCTAssertFalse(json?.contains(#""udid""#) ?? true,
                        "legacy `udid` key must not be emitted, got: \(json ?? "nil")")
     }
@@ -64,6 +78,14 @@ final class DeviceModelTests: XCTestCase {
         let payload = #"{"deviceId":"abc","name":"x","platform":"ios","state":"Booted"}"#
         let d = try JSONDecoder().decode(Device.self, from: Data(payload.utf8))
         XCTAssertEqual(d.udid, "abc")
+    }
+
+    func testTVOSJSONUsesDistinctPlatformDiscriminator() throws {
+        let d = Device(udid: "tv", name: "Apple TV", platform: .tvos, kind: .simulator, state: "Booted", runtime: "tvOS 18.2")
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let json = String(data: try encoder.encode(d), encoding: .utf8)
+        XCTAssertEqual(json, #"{"deviceId":"tv","kind":"simulator","name":"Apple TV","platform":"tvos","runtime":"tvOS 18.2","state":"Booted","target":"sim"}"#)
     }
 
     func testJSONAcceptsUDIDOnly() throws {
@@ -128,5 +150,64 @@ final class DeviceModelTests: XCTestCase {
         // Round-trips back to nil regardless.
         let decoded = try JSONDecoder().decode(Device.self, from: Data(json.utf8))
         XCTAssertNil(decoded.runtime)
+    }
+
+    // MARK: - target (sim vs physical device)
+
+    func testTargetDefaultsToSim() {
+        // Existing construction sites (SimctlDeviceLister, test fixtures)
+        // that don't pass `target` keep the historic Simulator meaning.
+        let d = Device(udid: "u", name: "n", platform: .ios, kind: .simulator, state: "Booted", runtime: "iOS 18.6")
+        XCTAssertEqual(d.target, .sim)
+    }
+
+    func testConnectedPhysicalDeviceIsUsable() {
+        // A physical device is never "Booted"; usability keys off the
+        // devicectl tunnel state instead.
+        let iphone = Device(udid: "00008110-001234567890001E", name: "Test iPhone",
+                            platform: .ios, kind: .physical, state: Device.State.deviceConnected, runtime: "iOS 18.7.8")
+        XCTAssertTrue(iphone.isUsable)
+        let appleTV = Device(udid: "0123456789abcdef0123456789abcdef01234567", name: "Test Apple TV",
+                             platform: .tvos, kind: .physical, state: Device.State.deviceConnected, runtime: "tvOS 26.5")
+        XCTAssertTrue(appleTV.isUsable)
+    }
+
+    func testDisconnectedPhysicalDeviceIsNotUsable() {
+        for state in ["disconnected", "unavailable"] {
+            let d = Device(udid: "X", name: "iPhone", platform: .ios, kind: .physical, state: state, runtime: "iOS 18.7")
+            XCTAssertFalse(d.isUsable, "device tunnelState '\(state)' should not be usable")
+        }
+    }
+
+    func testSimulatorUsabilityRuleUnchangedByTarget() {
+        // The device-target rule must not leak into the Simulator path:
+        // a .sim iOS device is usable only when Booted, not "connected".
+        let bootedSim = Device(udid: "S", name: "iPhone", platform: .ios, kind: .simulator, state: "Booted", runtime: "iOS 18.6")
+        XCTAssertTrue(bootedSim.isUsable)
+        let connectedSim = Device(udid: "S", name: "iPhone", platform: .ios, kind: .simulator, state: "connected", runtime: "iOS 18.6")
+        XCTAssertFalse(connectedSim.isUsable)
+    }
+
+    func testJSONIncludesTargetField() throws {
+        let d = Device(udid: "u", name: "n", platform: .ios, kind: .physical, state: "connected", runtime: "iOS 18.7")
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let json = String(data: try encoder.encode(d), encoding: .utf8) ?? ""
+        XCTAssertTrue(json.contains(#""target":"device""#), "target must be emitted, got: \(json)")
+    }
+
+    func testJSONDecodeDefaultsMissingTargetToSim() throws {
+        // Legacy payloads predating the target field decode as Simulators.
+        let payload = #"{"deviceId":"abc","name":"x","platform":"ios","state":"Booted"}"#
+        let d = try JSONDecoder().decode(Device.self, from: Data(payload.utf8))
+        XCTAssertEqual(d.target, .sim)
+    }
+
+    func testTargetRoundTrips() throws {
+        let original = Device(udid: "u", name: "n", platform: .tvos, kind: .physical, state: "connected", runtime: "tvOS 26.5")
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(Device.self, from: data)
+        XCTAssertEqual(original, decoded)
+        XCTAssertEqual(decoded.target, .device)
     }
 }

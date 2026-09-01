@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import Foundation
 
-/// Resolves the device identifier (iOS Simulator UDID or Android adb
+/// Resolves the device identifier (Apple Simulator UDID or Android adb
 /// serial) a device-scoped command should run against when the user
 /// does not pass `--device` (or its deprecated alias `--udid`)
 /// explicitly. Resolution order:
@@ -221,4 +221,290 @@ public struct DeviceResolver {
 
 extension String {
     fileprivate var nonEmptyOrNil: String? { isEmpty ? nil : self }
+}
+
+/// Enumerates *physical* Apple devices (iOS/tvOS) for the `sim-use devices`
+/// verb and, later, the device backend (T3). Complements `DeviceResolver`
+/// (booted Simulators) and `SimctlDeviceLister` (all Simulators): those never
+/// see a cabled iPhone or a paired Apple TV.
+///
+/// Two sources, merged and deduped by UDID:
+///
+///   • `xcrun devicectl list devices --json-output <tmp>` — modern
+///     (Xcode 16+), rich metadata. devicectl writes the JSON to the
+///     `--json-output` file (stdout gets a human table). The device UDID is
+///     `hardwareProperties.udid`; the top-level `identifier` is the
+///     CoreDevice UUID and must NOT be used as the UDID.
+///   • `idevice_id -l` — libimobiledevice's classic USB path. One bare UDID
+///     per line. A matching devicectl row keeps its rich metadata but is
+///     promoted to the effective "connected" state because the USB probe is
+///     live; a device only it reports becomes a minimal row. Skipped when
+///     `idevice_id` isn't installed (the runner returns [] on the `env`
+///     exit-127 "command not found").
+public enum AppleDeviceLister {
+    public enum ListerError: Error, LocalizedError {
+        case parseFailed(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .parseFailed(let m): return "could not parse devicectl JSON: \(m)"
+            }
+        }
+    }
+
+    // MARK: - devicectl JSON parsing
+
+    /// Parse the payload written by `devicectl list devices --json-output`.
+    public static func parseDevicectlJSON(_ data: Data) throws -> [Device] {
+        struct Envelope: Decodable { let result: ResultBlock }
+        struct ResultBlock: Decodable { let devices: [Dev] }
+        struct Dev: Decodable {
+            let deviceProperties: DeviceProps
+            let hardwareProperties: HardwareProps
+            let connectionProperties: ConnectionProps?
+        }
+        struct DeviceProps: Decodable { let name: String; let osVersionNumber: String? }
+        struct HardwareProps: Decodable { let udid: String; let platform: String?; let deviceType: String? }
+        struct ConnectionProps: Decodable { let tunnelState: String? }
+
+        let envelope: Envelope
+        do {
+            envelope = try JSONDecoder().decode(Envelope.self, from: data)
+        } catch {
+            throw ListerError.parseFailed(error.localizedDescription)
+        }
+
+        return envelope.result.devices.map { dev in
+            let isTV = deviceIsTV(
+                platform: dev.hardwareProperties.platform,
+                deviceType: dev.hardwareProperties.deviceType
+            )
+            let platform: Device.Platform = isTV ? .tvos : .ios
+            // tunnelState is the reachability signal Device.isUsable keys off
+            // ("connected" ⇒ usable). Absent ⇒ treat as not reachable.
+            let state = dev.connectionProperties?.tunnelState ?? "unavailable"
+            let family = isTV ? "tvOS" : "iOS"
+            let runtime = dev.deviceProperties.osVersionNumber.map { "\(family) \($0)" }
+            return Device(
+                udid: dev.hardwareProperties.udid,
+                name: dev.deviceProperties.name,
+                platform: platform,
+                kind: .physical,
+                state: state,
+                runtime: runtime
+            )
+        }
+        .sorted { $0.udid < $1.udid }
+    }
+
+    /// iOS vs tvOS from devicectl's hardware fields. iPhone/iPad report
+    /// platform `iOS`; Apple TV reports `tvOS` / deviceType `appleTV`. None
+    /// of iPhone/iPad/iOS contains "tv", so the substring test is safe.
+    static func deviceIsTV(platform: String?, deviceType: String?) -> Bool {
+        let hay = "\(platform ?? "") \(deviceType ?? "")".lowercased()
+        return hay.contains("tv")
+    }
+
+    // MARK: - idevice_id merge
+
+    /// Fold bare `idevice_id -l` UDIDs into the devicectl rows: dedupe by
+    /// UDID while keeping the richer devicectl metadata, promote a matching
+    /// row to the effective "connected" state, and add a minimal `.device`
+    /// row for any UDID only libimobiledevice knows about.
+    ///
+    /// The promotion matters when CoreDevice's cached/local-network row is
+    /// stuck at "connecting" even though usbmux can currently reach the
+    /// cabled device. `idevice_id -l` only emits live USB attachments, so it
+    /// is a stronger reachability signal for that overlap without forcing us
+    /// to discard devicectl's name/platform/runtime metadata.
+    public static func mergeIdeviceIDUDIDs(into devices: [Device], udids: [String]) -> [Device] {
+        let reachableUDIDs = Set(
+            udids
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+        let promoted = devices.map { device in
+            guard reachableUDIDs.contains(device.udid),
+                  device.target == .device,
+                  device.state != Device.State.deviceConnected
+            else { return device }
+            return Device(
+                udid: device.udid,
+                name: device.name,
+                platform: device.platform,
+                kind: device.kind,
+                state: Device.State.deviceConnected,
+                runtime: device.runtime
+            )
+        }
+        let known = Set(promoted.map(\.udid))
+        let extras = reachableUDIDs
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !known.contains($0) }
+            .sorted()
+            .map { udid in
+                Device(
+                    udid: udid,
+                    name: udid,
+                    platform: .ios,
+                    kind: .physical,
+                    state: Device.State.deviceConnected,
+                    runtime: nil
+                )
+            }
+        return promoted + extras
+    }
+
+    // MARK: - live enumeration
+
+    /// The merged physical-device list. Resilient by design: a devicectl
+    /// failure or a missing idevice_id degrades to fewer rows, never an
+    /// error — the `devices` verb must still list Simulators.
+    public static func listPhysicalDevices() -> [Device] {
+        listPhysicalDevices(
+            devicectlProvider: runDevicectl,
+            ideviceIDProvider: runIdeviceID,
+            devicectlDetailsProvider: runDevicectlDetails
+        )
+    }
+
+    /// Injectable seam behind `listPhysicalDevices()`. Internal so tests can
+    /// drive the merge without spawning `devicectl` / `idevice_id`; the
+    /// runners stay implementation details (a public default argument can't
+    /// reference them anyway).
+    static func listPhysicalDevices(
+        devicectlProvider: () -> Data?,
+        ideviceIDProvider: () -> [String]
+    ) -> [Device] {
+        listPhysicalDevices(
+            devicectlProvider: devicectlProvider,
+            ideviceIDProvider: ideviceIDProvider,
+            devicectlDetailsProvider: { _ in nil }
+        )
+    }
+
+    /// `devicectl list devices` can retain a stale `disconnected` cache row
+    /// for a paired Wi-Fi Apple TV even while `device info details` can open
+    /// a live CoreDevice tunnel. Probe only those tvOS rows: unavailable TVs
+    /// and iOS devices remain untouched, so normal listing stays cheap.
+    static func listPhysicalDevices(
+        devicectlProvider: () -> Data?,
+        ideviceIDProvider: () -> [String],
+        devicectlDetailsProvider: (String) -> String?
+    ) -> [Device] {
+        var devices: [Device] = []
+        if let data = devicectlProvider() {
+            devices = (try? parseDevicectlJSON(data)) ?? []
+        }
+        devices = promoteLiveDisconnectedAppleTVs(
+            in: devices,
+            devicectlDetailsProvider: devicectlDetailsProvider
+        )
+        return mergeIdeviceIDUDIDs(into: devices, udids: ideviceIDProvider())
+    }
+
+    static func promoteLiveDisconnectedAppleTVs(
+        in devices: [Device],
+        devicectlDetailsProvider: (String) -> String?
+    ) -> [Device] {
+        devices.map { device in
+            guard device.platform == .tvos,
+                  device.target == .device,
+                  device.state.lowercased() == "disconnected",
+                  devicectlDetailsProvider(device.udid)?.lowercased() == Device.State.deviceConnected
+            else { return device }
+            return Device(
+                udid: device.udid,
+                name: device.name,
+                platform: device.platform,
+                kind: device.kind,
+                state: Device.State.deviceConnected,
+                runtime: device.runtime
+            )
+        }
+    }
+
+    // MARK: - subprocess runners
+
+    /// `xcrun devicectl list devices --json-output <tmp>`, returning the
+    /// file's contents. `nil` on any spawn / non-zero / read failure.
+    static func runDevicectl() -> Data? {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("sim-use-devicectl-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = ["devicectl", "list", "devices", "--json-output", tmp.path]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+        guard process.terminationStatus == 0 else { return nil }
+        return try? Data(contentsOf: tmp)
+    }
+
+    /// Actively resolve a paired Apple TV. Unlike the cached list verb,
+    /// `device info details` opens the CoreDevice tunnel and reports its live
+    /// state. Returns nil on any tool or parse failure.
+    static func runDevicectlDetails(udid: String) -> String? {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("sim-use-devicectl-details-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = [
+            "devicectl", "device", "info", "details",
+            "--device", udid,
+            "--timeout", "10",
+            "--json-output", tmp.path,
+        ]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+        guard process.terminationStatus == 0,
+              let data = try? Data(contentsOf: tmp)
+        else { return nil }
+
+        struct Envelope: Decodable { let result: ResultBlock }
+        struct ResultBlock: Decodable { let connectionProperties: ConnectionProps? }
+        struct ConnectionProps: Decodable { let tunnelState: String? }
+        return try? JSONDecoder().decode(Envelope.self, from: data)
+            .result.connectionProperties?.tunnelState
+    }
+
+    /// `idevice_id -l` via `env` so PATH lookup handles the Homebrew install
+    /// location. Exit 127 (command not found) and any spawn failure map to
+    /// `[]`, which is the "libimobiledevice not installed, skip" path.
+    static func runIdeviceID() -> [String] {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["idevice_id", "-l"]
+        let stdout = Pipe()
+        process.standardOutput = stdout
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return []
+        }
+        guard process.terminationStatus == 0 else { return [] }
+        let data = stdout.fileHandleForReading.readDataToEndOfFile()
+        let text = String(data: data, encoding: .utf8) ?? ""
+        return text
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
 }
