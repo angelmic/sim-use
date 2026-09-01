@@ -30,6 +30,13 @@ Read `AGENTS.md` before starting. If its build or test commands change, follow
 the repository rather than stale commands in this skill and update this skill
 after the five-gate run.
 
+The default is a commit-by-commit rebase. If both sides rewrote the same
+architecture so extensively that replaying obsolete intermediate commits would
+make the audit less reliable, stop and obtain approval before changing
+strategy. The accepted net-diff replant fallback, including its tree-preserving
+ancestry bridge, is recorded in
+[`ADR-0001`](../../../docs/adr/0001-net-diff-replant-for-divergent-upstream-sync.md).
+
 ## Gate 0: Freeze scope and create recovery
 
 1. Record the repo root, current `main`, `origin/main`, and `upstream/main`.
